@@ -1,8 +1,14 @@
 use core::convert::{TryFrom, TryInto};
 use crc32fast::Hasher;
+use log::info;
+use miniz_oxide::inflate::core::DecompressorOxide;
 use miniz_oxide::inflate::TINFLStatus;
 use num_enum::TryFromPrimitive;
 use crate::error::DecodeError;
+use crate::read_u32;
+use crate::types::*;
+
+const PNG_MAGIC_BYTES: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
 
 pub struct ParsedPng<'a> {
     pub header: PngHeader,
@@ -14,59 +20,77 @@ pub struct ParsedPng<'a> {
     background: Option<&'a [u8]>,
 }
 
-
-const PNG_MAGIC_BYTES: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
-
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
-pub enum ColorType {
-    Grayscale = 0,
-    Rgb = 2,
-    Palette = 3,
-    GrayscaleAlpha = 4,
-    RgbAlpha = 6,
+struct ChunkDecompressor<'src, 'buf> {
+    decompressor: DecompressorOxide,
+    // slice containing ImageData chunks
+    data_chunks: &'src [u8],
+    // position of the next chunk in this slice
+    next_chunk_start: Option<usize>,
+    // slice of the current data chunk
+    current_chunk: Option<&'src [u8]>,
+    // circular buffer where decompressed data is written
+    buffer: &'buf mut [u8],
+    // first waiting decompressed byte
+    buffer_pos: usize,
+    // size of waiting decompressed data
+    buffer_count: usize,
+    // non-circular buffer data that must be kept out of circular buffer during decompress call
+    buffer_extra: &'buf mut [u8],
+    // size of waiting data in buffer_extra
+    extra_count: usize,
 }
 
-impl ColorType {
-    pub fn sample_multiplier(&self) -> usize {
-        match self {
-            ColorType::Grayscale => 1,
-            ColorType::Rgb => 3,
-            ColorType::Palette => 1,
-            ColorType::GrayscaleAlpha => 2,
-            ColorType::RgbAlpha => 4,
+impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
+    // advance current chunk by one, result in self.current_chunk
+    fn next_chunk(&mut self) {
+        let next_start = match self.next_chunk_start {
+            None => return,
+            Some(x) => x,
+        };
+        // it was already unwrapped during first parse
+        loop {
+            if next_start >= self.data_chunks.len() {
+                self.current_chunk = None;
+                self.next_chunk_start = None;
+                return;
+            }
+            let next_chunk = read_chunk(self.data_chunks, next_start, false).unwrap();
+            self.next_chunk_start = Some(next_chunk.end);
+            if next_chunk.chunk_type != ChunkType::ImageData {
+                continue;
+            } else {
+                self.current_chunk = Some(next_chunk.data);
+                return;
+            }
         }
+    }
+
+    // get size bytes from circular buffer, or an error if it's not possible
+    fn get_bytes(&mut self, size: usize) -> Result<&'buf [u8]> {
+        if self.buffer_count + self.extra_count >= size {
+            return Ok(Some(self.scanline2(size)?));
+        }
+
+        if self.next_chunk >= self.data_chunks.len() {
+            info!("ended");
+            return Ok(None);
+        }
+
     }
 }
 
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
-pub enum CompressionMethod {
-    Deflate = 0,
+pub struct ScanlineData<'a> {
+    filter_type: FilterType,
+    // a scanline spans at most 3 buffers
+    buffer1: &'a mut [u8],
+    buffer2: &'a mut [u8],
+    buffer3: &'a mut [u8],
+    // optimization to avoid computing position all the time
+    buffer3_pos: usize,
+    // used for bound checking only, TODO maybe remove
+    total_size: usize,
 }
 
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
-pub enum FilterMethod {
-    Adaptive = 0,
-}
-
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
-pub enum FilterType {
-    None = 0,
-    Sub = 1,
-    Up = 2,
-    Average = 3,
-    Paeth = 4,
-}
-
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
-pub enum InterlaceMethod {
-    None = 0,
-    Adam7 = 1,
-}
 
 #[derive(Debug, Clone)]
 pub struct PngHeader {
@@ -175,52 +199,6 @@ impl PngHeader {
     }
 
 }
-#[derive(Debug, Clone, Copy)]
-enum PixelType {
-    Grayscale1,
-    Grayscale2,
-    Grayscale4,
-    Grayscale8,
-    Grayscale16,
-
-    Rgb8,
-    Rgb16,
-
-    Palette1,
-    Palette2,
-    Palette4,
-    Palette8,
-
-    GrayscaleAlpha8,
-    GrayscaleAlpha16,
-
-    RgbAlpha8,
-    RgbAlpha16,
-}
-
-impl PixelType {
-    fn new(color_type: ColorType, bit_depth: u8) -> Result<Self, DecodeError> {
-        let result = match (color_type, bit_depth) {
-            (ColorType::Grayscale,1) => PixelType::Grayscale1,
-            (ColorType::Grayscale,2) => PixelType::Grayscale2,
-            (ColorType::Grayscale,4) => PixelType::Grayscale4,
-            (ColorType::Grayscale,8) => PixelType::Grayscale8,
-            (ColorType::Grayscale,16) => PixelType::Grayscale16,
-            (ColorType::Rgb,8) => PixelType::Rgb8,
-            (ColorType::Rgb,16) => PixelType::Rgb16,
-            (ColorType::Palette,1) => PixelType::Palette1,
-            (ColorType::Palette,2) => PixelType::Palette2,
-            (ColorType::Palette,4) => PixelType::Palette4,
-            (ColorType::Palette,8) => PixelType::Palette8,
-            (ColorType::GrayscaleAlpha,8) => PixelType::GrayscaleAlpha8,
-            (ColorType::GrayscaleAlpha,16) => PixelType::GrayscaleAlpha16,
-            (ColorType::RgbAlpha,8) => PixelType::RgbAlpha8,
-            (ColorType::RgbAlpha,18) => PixelType::RgbAlpha16,
-            _ => return Err(DecodeError::InvalidColorTypeBitDepthCombination),
-        };
-        Ok(result)
-    }
-}
 
 #[derive(Debug, Clone)]
 enum TransparencyChunk<'a> {
@@ -252,19 +230,6 @@ impl<'a> TransparencyChunk<'a> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ChunkType {
-    ImageHeader,
-    Palette,
-    Transparency,
-    Background,
-    Srgb,
-    ImageData,
-    ImageEnd,
-    Gamma,
-    Unknown([u8; 4]),
-}
-
 #[derive(Debug)]
 struct Chunk<'a> {
     chunk_type: ChunkType,
@@ -289,10 +254,6 @@ impl ChunkType {
             unknown_chunk_type => ChunkType::Unknown(unknown_chunk_type.try_into().unwrap()),
         }
     }
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
 }
 
 fn read_chunk(bytes: &[u8], start: usize, check_crc: bool) -> Result<Chunk, DecodeError> {

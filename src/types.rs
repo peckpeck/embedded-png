@@ -1,0 +1,114 @@
+use num_enum::TryFromPrimitive;
+use crate::error::DecodeError;
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+pub enum ColorType {
+    Grayscale = 0,
+    Rgb = 2,
+    Palette = 3,
+    GrayscaleAlpha = 4,
+    RgbAlpha = 6,
+}
+
+impl ColorType {
+    pub fn sample_multiplier(&self) -> usize {
+        match self {
+            ColorType::Grayscale => 1,
+            ColorType::Rgb => 3,
+            ColorType::Palette => 1,
+            ColorType::GrayscaleAlpha => 2,
+            ColorType::RgbAlpha => 4,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+pub enum CompressionMethod {
+    Deflate = 0,
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+pub enum FilterMethod {
+    Adaptive = 0,
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+pub enum FilterType {
+    None = 0,
+    Sub = 1,
+    Up = 2,
+    Average = 3,
+    Paeth = 4,
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+pub enum InterlaceMethod {
+    None = 0,
+    Adam7 = 1,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PixelType {
+    Grayscale1,
+    Grayscale2,
+    Grayscale4,
+    Grayscale8,
+    Grayscale16,
+
+    Rgb8,
+    Rgb16,
+
+    Palette1,
+    Palette2,
+    Palette4,
+    Palette8,
+
+    GrayscaleAlpha8,
+    GrayscaleAlpha16,
+
+    RgbAlpha8,
+    RgbAlpha16,
+}
+
+impl PixelType {
+    pub fn new(color_type: ColorType, bit_depth: u8) -> Result<Self, DecodeError> {
+        let result = match (color_type, bit_depth) {
+            (ColorType::Grayscale,1) => PixelType::Grayscale1,
+            (ColorType::Grayscale,2) => PixelType::Grayscale2,
+            (ColorType::Grayscale,4) => PixelType::Grayscale4,
+            (ColorType::Grayscale,8) => PixelType::Grayscale8,
+            (ColorType::Grayscale,16) => PixelType::Grayscale16,
+            (ColorType::Rgb,8) => PixelType::Rgb8,
+            (ColorType::Rgb,16) => PixelType::Rgb16,
+            (ColorType::Palette,1) => PixelType::Palette1,
+            (ColorType::Palette,2) => PixelType::Palette2,
+            (ColorType::Palette,4) => PixelType::Palette4,
+            (ColorType::Palette,8) => PixelType::Palette8,
+            (ColorType::GrayscaleAlpha,8) => PixelType::GrayscaleAlpha8,
+            (ColorType::GrayscaleAlpha,16) => PixelType::GrayscaleAlpha16,
+            (ColorType::RgbAlpha,8) => PixelType::RgbAlpha8,
+            (ColorType::RgbAlpha,18) => PixelType::RgbAlpha16,
+            _ => return Err(DecodeError::InvalidColorTypeBitDepthCombination),
+        };
+        Ok(result)
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ChunkType {
+    ImageHeader,
+    Palette,
+    Transparency,
+    Background,
+    Srgb,
+    ImageData,
+    ImageEnd,
+    Gamma,
+    Unknown([u8; 4]),
+}
+
