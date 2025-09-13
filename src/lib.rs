@@ -1,6 +1,7 @@
 mod png;
 mod error;
 mod types;
+mod inflate;
 
 use embedded_graphics_core::{pixelcolor::PixelColor,
                              pixelcolor::Rgb888,
@@ -74,7 +75,7 @@ impl<C: PixelColor> ImageDrawable for BufferedPng<C> {
 
 pub fn dump_png(bytes: &[u8]) {
     log::info!("dumping");
-    let data = match png::parse_png(bytes, true) {
+    let data = match ParsedPng::from_bytes(bytes, true) {
         Ok(x) => {log::info!("okok"); log::info!("Ok {:?}", x.header)},
         Err(e) => {log::info!("Err {:?}",e)}
     };

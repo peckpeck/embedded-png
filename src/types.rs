@@ -115,7 +115,7 @@ pub enum ChunkType {
 }
 
 impl ChunkType {
-    fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         match bytes {
             b"IHDR" => ChunkType::ImageHeader,
             b"PLTE" => ChunkType::Palette,
@@ -131,4 +131,32 @@ impl ChunkType {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum TransparencyChunk<'a> {
+    Palette(&'a [u8]),
+    Grayscale(u8),
+    Rgb(u8, u8, u8),
+}
 
+impl<'a> TransparencyChunk<'a> {
+    pub fn from_data(data: &'a [u8], pixel_type: PixelType) -> Option<Self> {
+        log::info!("transparency {:?}", pixel_type);
+        match pixel_type {
+            PixelType::Grayscale1 => Some(TransparencyChunk::Grayscale(data[1] & 0b1)),
+            PixelType::Grayscale2 => Some(TransparencyChunk::Grayscale(data[1] & 0b11)),
+            PixelType::Grayscale4 => Some(TransparencyChunk::Grayscale(data[1] & 0b1111)),
+            PixelType::Grayscale8 => Some(TransparencyChunk::Grayscale(data[1])),
+            PixelType::Grayscale16 => Some(TransparencyChunk::Grayscale(data[0])),
+            PixelType::Rgb8 => Some(TransparencyChunk::Rgb(data[1], data[3], data[5])),
+            PixelType::Rgb16 => Some(TransparencyChunk::Rgb(data[0], data[2], data[4])),
+            PixelType::Palette1 => Some(TransparencyChunk::Palette(data)),
+            PixelType::Palette2 => Some(TransparencyChunk::Palette(data)),
+            PixelType::Palette4 => Some(TransparencyChunk::Palette(data)),
+            PixelType::Palette8 => Some(TransparencyChunk::Palette(data)),
+            PixelType::GrayscaleAlpha8 => None,
+            PixelType::GrayscaleAlpha16 => None,
+            PixelType::RgbAlpha8 => None,
+            PixelType::RgbAlpha16 => None,
+        }
+    }
+}
