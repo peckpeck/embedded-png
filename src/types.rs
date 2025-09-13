@@ -1,3 +1,5 @@
+// Mostly taken as is from png-decoder crate by Brian Schwind, licence MIT
+
 use num_enum::TryFromPrimitive;
 use crate::error::DecodeError;
 
@@ -111,4 +113,22 @@ pub enum ChunkType {
     Gamma,
     Unknown([u8; 4]),
 }
+
+impl ChunkType {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        match bytes {
+            b"IHDR" => ChunkType::ImageHeader,
+            b"PLTE" => ChunkType::Palette,
+            b"tRNS" => ChunkType::Transparency,
+            b"bKGD" => ChunkType::Background,
+            b"sRGB" => ChunkType::Srgb,
+            b"IDAT" => ChunkType::ImageData,
+            b"IEND" => ChunkType::ImageEnd,
+            b"gAMA" => ChunkType::Gamma,
+            // unwrap allowed, we have a single private caller here
+            unknown_chunk_type => ChunkType::Unknown(unknown_chunk_type.try_into().unwrap()),
+        }
+    }
+}
+
 
