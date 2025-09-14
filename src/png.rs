@@ -1,9 +1,5 @@
 use core::convert::{TryFrom, TryInto};
-use core::cmp::min;
-use std::io::ErrorKind::NetworkDown;
 use crc32fast::Hasher;
-use log::{error, info};
-use png_decoder::Scanline2;
 use crate::error::DecodeError;
 use crate::inflate::{ChunkDecompressor, ScanlineData};
 use crate::read_u32;
@@ -11,19 +7,19 @@ use crate::types::*;
 
 const PNG_MAGIC_BYTES: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
 
-pub struct ParsedPng<'a> {
+pub struct ParsedPng<'src> {
     pub header: PngHeader,
     pub pixel_type: PixelType,
-    pub palette: Option<&'a [u8]>,
-    pub transparency: Option<TransparencyChunk<'a>>,
-    pub background: Option<&'a [u8]>,
+    pub palette: Option<&'src [u8]>,
+    pub transparency: Option<TransparencyChunk<'src>>,
+    pub background: Option<&'src [u8]>,
     pub crc_checked: bool,
     // no need to store all data chunks separately, they HAVE TO be consecutive
-    data_chunks: &'a[u8],
+    data_chunks: &'src [u8],
 }
 
-impl<'a> ParsedPng<'a> {
-    pub fn from_bytes(bytes: &'a [u8], check_crc: bool) -> Result<ParsedPng, DecodeError> {
+impl<'src> ParsedPng<'src> {
+    pub fn from_bytes(bytes: &'src [u8], check_crc: bool) -> Result<ParsedPng, DecodeError> {
         if bytes.len() < PNG_MAGIC_BYTES.len() {
             return Err(DecodeError::MissingBytes);
         }
@@ -82,8 +78,8 @@ impl<'a> ParsedPng<'a> {
 
 #[derive(Debug, Clone)]
 pub struct PngHeader {
-    pub width: u32,
-    pub height: u32,
+    pub width: usize,
+    pub height: usize,
     pub bit_depth: u8,
     pub color_type: ColorType,
     pub compression_method: CompressionMethod,
@@ -101,8 +97,8 @@ impl PngHeader {
             return Err(DecodeError::MissingBytes);
         }
 
-        let width = read_u32(chunk.data, 0);
-        let height = read_u32(chunk.data, 4);
+        let width = read_u32(chunk.data, 0) as usize;
+        let height = read_u32(chunk.data, 4) as usize;
         let bit_depth = chunk.data[8];
         if !bit_depth.is_power_of_two() || bit_depth > 16 {
             return Err(DecodeError::InvalidBitDepth);
@@ -127,7 +123,7 @@ impl PngHeader {
         })
     }
 
-    fn pass_info(&self, pass: usize) -> (u32, u32) {
+    fn pass_info(&self, pass: usize) -> (usize, usize) {
         match pass {
             1 => {
                 let pass_width = (self.width + 7) / 8;
@@ -191,16 +187,16 @@ impl PngHeader {
 
 // TODO review pubs
 #[derive(Debug)]
-pub struct Chunk<'a> {
+pub struct Chunk<'src> {
     pub chunk_type: ChunkType,
-    pub data: &'a [u8],
+    pub data: &'src [u8],
     pub start: usize,
     pub end: usize,
     pub _crc: u32,
 }
 
-impl<'a> Chunk<'a> {
-    pub fn from_bytes(bytes: &'a [u8], start: usize, check_crc: bool) -> Result<Self, DecodeError> {
+impl<'src> Chunk<'src> {
+    pub fn from_bytes(bytes: &'src [u8], start: usize, check_crc: bool) -> Result<Self, DecodeError> {
         if bytes.len() - start < 4 {
             return Err(DecodeError::MissingBytes);
         }
@@ -234,37 +230,36 @@ impl<'a> Chunk<'a> {
     }
 }
 
-fn defilter(filter_type: FilterType, top_left: u8, top: u8, left: u8, current: u8) -> u8 {
-    match filter_type {
-        FilterType::None => current,
-        FilterType::Sub => current.wrapping_add(left),
-        FilterType::Up => current.wrapping_add(top),
-        FilterType::Average => {
-            // we can either work wit u16 or with u8 and a carry
-            // let's choose u16
-            let average = (left as u16 + top as u16) / 2;
-            current.wrapping_add(average as u8)
-        },
-        FilterType::Paeth => {
-            let a = left as i16;
-            let b = top as i16;
-            let c = top_left as i16;
-            let p = a + b - c;      // initial estimate
-            let pa = (p - a).abs(); // distances to a, b, c
-            let pb = (p - b).abs();
-            let pc = (p - c).abs();
-            // return nearest of a,b,c,
-            // breaking ties in order a,b,c.
-            let predictor = if pa <= pb && pa <= pc {
-                left
-            } else if pb <= pc {
-                top
-            } else {
-                top_left
-            };
-            current.wrapping_add(predictor)
-        },
+pub struct DecodedScanline<'buf> {
+    scanline_data: &'buf [u8],
+    pass: Option<usize>,
+    y: usize,
+}
+
+impl<'buf> DecodedScanline<'buf> {
+    pub fn new_linear(scanline_data: &'buf [u8], y: usize) -> Self {
+        DecodedScanline { scanline_data, pass: None, y }
     }
+    pub fn new_interlaced(scanline_data: &'buf [u8], y: usize, pass: usize) -> Self {
+        DecodedScanline { scanline_data, pass: Some(pass), y }
+    }
+    pub fn get_xy(&self, x: usize) -> (usize, usize) {
+        match self.pass {
+            None => (x, self.y),
+            Some(1) => (x * 8, self.y * 8),
+            Some(2) => (x * 8 + 4, self.y * 8),
+            Some(3) => (x * 4, self.y * 8 + 4),
+            Some(4) => (x * 4 + 2, self.y * 4),
+            Some(5) => (x * 2, self.y * 4 + 2),
+            Some(6) => (x * 2 + 1, self.y * 2),
+            Some(7) => (x, self.y * 2 + 1),
+            _ => (0, 0),
+        }
+    }
+    pub fn get_pixel(&self, x: usize) -> bool {
+        self.pass.is_none()
+    }
+
 }
 
 pub struct PngReader<'src, 'buf> {
@@ -280,6 +275,7 @@ pub struct PngReader<'src, 'buf> {
 }
 
 impl<'src, 'buf> PngReader<'src, 'buf> {
+    // we assume that last_scanline is zero initialized
     pub fn from_parsed_png(parsed_png: ParsedPng<'src>, buffer: &'buf mut [u8],
                            buffer_extra: &'buf mut [u8], last_scanline: &'buf mut [u8]) -> Result<Self, DecodeError> {
         let ParsedPng { header, pixel_type,
@@ -303,133 +299,61 @@ impl<'src, 'buf> PngReader<'src, 'buf> {
     }
 
     // TODO: understand why we need 'a here
-    pub fn next_scanline<'a: 'buf>(&'a mut self) -> Result<&'buf [u8], DecodeError> {
+    // self.next_y and self.next_pass must be kept before calling this, they are invalid just after (todo ?)
+    pub fn next_scanline<'a: 'buf>(&'a mut self) -> Result<DecodedScanline<'buf>, DecodeError> {
+        let bytes_per_pixel = self.header.bytes_per_pixel();
         match self.header.interlace_method {
             InterlaceMethod::None => {
-                let bytes_per_pixel = self.header.bytes_per_pixel();
                 let bytes_per_scanline = self.header.bytes_per_scanline_max()?; // TODO remove error case
-                let pixels_per_scanline = bytes_per_scanline / bytes_per_pixel;
                 if let Some(scanline) = self.decompressor.get_scanline(bytes_per_scanline)? {
-                    let filter_type = scanline.filter_type;
-                    // store defiltered data into last_scanline
-                    // since it already contains last scanline data,
-                    // we need to keep 3 pixels elsewhere for defiltering
-                    // and write them later (left, top, top-left)
-
-                    // rust array must be allocated at compile time, so we use the max bpp value
-                    let mut left = [0_u8; 8];
-                    let mut top_left = [0_u8; 8];
-                    let mut top = [0_u8; 8];
-
-                    // defilter is applied on bytes, but for byes of the same pixel
-                    // so we do a double iteration
-                    for i in 0..pixels_per_scanline {
-                        let pos = i * bytes_per_pixel;
-                        for j in 0..bytes_per_pixel {
-                            top[j] = self.last_scanline[pos+j];
-                            let current = scanline.get(pos+j);
-                            let defiltered = defilter(filter_type, top_left[j], top[j], left[j], current);
-                            self.last_scanline[pos+j] = defiltered;
-                            top_left[j] = top[j];
-                            left[j] = defiltered;
-                        }
-                    }
+                    let y = self.next_y;
+                    let pixels_per_scanline = bytes_per_scanline / bytes_per_pixel;
                     self.next_y += 1;
-                    Ok(self.last_scanline)
+                    // store defiltered data into last_scanline
+                    scanline.decode(self.last_scanline, pixels_per_scanline, bytes_per_pixel);
+                    Ok(DecodedScanline::new_linear(self.last_scanline, y))
                 } else {
                     Err(DecodeError::MissingBytes) // TODO Missing scanline err
                 }
             },
             InterlaceMethod::Adam7 => {
-                let bytes_per_pixel = self.header.bytes_per_pixel();
-                let (pass_width, pass_height) = loop {
-                    let (pass_width, pass_height) = self.header.pass_info(self.next_pass);
-                    self.next_pass += 1;
-                    if self.next_pass == 8 {
-                        self.next_pass = 1;
-                    }
-                    // Skip empty passes.
-                    if pass_width != 0 && pass_height != 0 {
-                        break (pass_width, pass_height);
-                    }
-                };
+                // Adam7 Interlacing Pattern
+                // 1 6 4 6 2 6 4 6
+                // 7 7 7 7 7 7 7 7
+                // 5 6 5 6 5 6 5 6
+                // 7 7 7 7 7 7 7 7
+                // 3 6 4 6 3 6 4 6
+                // 7 7 7 7 7 7 7 7
+                // 5 6 5 6 5 6 5 6
+                // 7 7 7 7 7 7 7 7
+                let pass = self.next_pass;
+                let (pass_width, pass_height) = self.header.pass_info(pass);
                 let bytes_per_scanline = pass_width as usize * bytes_per_pixel;
-                let pixels_per_scanline = bytes_per_scanline / bytes_per_pixel;
+                if let Some(scanline) = self.decompressor.get_scanline(bytes_per_scanline)? {
+                    let y = self.next_y;
+                    let pixels_per_scanline = bytes_per_scanline / bytes_per_pixel;
 
-/*                for y in 0..pass_height {
-                    let filter_type = FilterType::try_from(self.scanline_data[cursor])
-                        .map_err(|_| DecodeError::InvalidFilterType)?;
-                    cursor += 1;
-
-                    let current_scanline =
-                        &mut self.scanline_data[cursor..(cursor + bytes_per_scanline)];
-
-                    for x in 0..(bytes_per_scanline) {
-                        let unfiltered_byte = defilter(
-                            filter_type,
-                            bytes_per_pixel,
-                            x,
-                            current_scanline,
-                            last_scanline,
-                        );
-                        current_scanline[x] = unfiltered_byte;
+                    self.next_y += 1;
+                    if self.next_y > pass_height {
+                        loop {
+                            self.next_pass += 1;
+                            if self.next_pass == 8 {
+                                self.next_pass = 1;
+                            }
+                            // Skip empty passes.
+                            let (pass_width, pass_height) = self.header.pass_info(self.next_pass);
+                            if pass_width != 0 && pass_height != 0 {
+                                // TODO reset last scanline on new passes
+                                break;
+                            }
+                        };
                     }
-  */              todo!()
-                /*
-                                // Adam7 Interlacing Pattern
-                                // 1 6 4 6 2 6 4 6
-                                // 7 7 7 7 7 7 7 7
-                                // 5 6 5 6 5 6 5 6
-                                // 7 7 7 7 7 7 7 7
-                                // 3 6 4 6 3 6 4 6
-                                // 7 7 7 7 7 7 7 7
-                                // 5 6 5 6 5 6 5 6
-                                // 7 7 7 7 7 7 7 7
 
-                                for pass in 1..=7 {
-                                    let (pass_width, pass_height) = header.pass_info(pass);
-
-
-                                    let bytes_per_scanline = pass_width as usize * bytes_per_pixel;
-                                    let last_scanline = &mut last_scanline[..(bytes_per_scanline)];
-                                    for byte in last_scanline.iter_mut() {
-                                        *byte = 0;
-                                    }
-
-                                    for y in 0..pass_height {
-                                        let filter_type = FilterType::try_from(self.scanline_data[cursor])
-                                            .map_err(|_| DecodeError::InvalidFilterType)?;
-                                        cursor += 1;
-
-                                        let current_scanline =
-                                            &mut self.scanline_data[cursor..(cursor + bytes_per_scanline)];
-
-                                        for x in 0..(bytes_per_scanline) {
-                                            let unfiltered_byte = defilter(
-                                                filter_type,
-                                                bytes_per_pixel,
-                                                x,
-                                                current_scanline,
-                                                last_scanline,
-                                            );
-                                            current_scanline[x] = unfiltered_byte;
-                                        }
-
-                                        let scanline_iter = ScanlineIterator::new(
-                                            pass_width,
-                                            self.pixel_type,
-                                            current_scanline,
-                                            & self.ancillary_chunks,
-                                        );
-
-                                        let xy_calculator = XYCalculator::new_interlaced(pass);
-                                        scan(scanline_iter, xy_calculator, y as usize);
-
-                                        last_scanline.copy_from_slice(current_scanline);
-
-                                        cursor += bytes_per_scanline;
-                                    }
-                                }*/
+                    scanline.decode(self.last_scanline, pixels_per_scanline, bytes_per_pixel);
+                    Ok(DecodedScanline::new_interlaced(self.last_scanline, y, pass))
+                } else {
+                    Err(DecodeError::MissingBytes) // TODO Missing scanline err
+                }
             },
         }
     }

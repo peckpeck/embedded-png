@@ -9,8 +9,8 @@ use crate::types::{ChunkType, FilterType};
 
 /// A single PNG scanline that points to decompressor buffer data
 pub struct ScanlineData<'a> {
-    // each scanline has its filter pe
-    pub filter_type: FilterType,
+    // scanline filter type cache (todo remove)
+    filter_type: FilterType,
     // a scanline spans at most 3 buffers because the decompressor uses a Q buffer
     buffer1: &'a mut [u8],
     buffer2: &'a mut [u8],
@@ -23,64 +23,47 @@ pub struct ScanlineData<'a> {
 
 impl<'a> ScanlineData<'a> {
     // create a scanline from the Q buffer
-    // size is the size of the scanline,
-    // with the filer type, size+1 bytes are taken from the buffer
     // returns the size of the consumed data from main buffer
     fn new(extra_buffer: &'a mut [u8], main_buffer: &'a mut [u8], main_pos: usize, size: usize) -> Result<(usize, Self), DecodeError> {
         // data is taken from extra_buffer them from main_buffer
         // - extra_buffer if fully consumed
         // - remaining bytes are taken from main buffer
         // - in potentially 2 steps if it spans past the end of the allocated memory
-        if extra_buffer.len() >= size +1 { error!("Extra buffer too big {}", extra_buffer.len()); } // debug_assert
-        // extract filter type
-        let (type_byte, extra_start) = if extra_buffer.len() > 0 {
-            (extra_buffer[0], 1)
-        } else {
-            (main_buffer[main_pos], 0)
-        };
-        let filter_type = FilterType::try_from(type_byte)
-            .map_err(|_| DecodeError::InvalidFilterType)?;
-        // consume extra_buffer into buffer1
-        let size_rest = size - (extra_buffer.len() - extra_start);
-        let buffer1 = &mut extra_buffer[extra_start..];
-        // first part of main_buffer into buffer2
-        let buffer2_start = main_pos + (1-extra_start);
-        let buffer2_end = min(size_rest+buffer2_start, main_buffer.len());
-        let size_rest = size_rest - (buffer2_end - buffer2_start);
+        if extra_buffer.len() > size { error!("Extra buffer too big {}", extra_buffer.len()); } // debug_assert
+        // first consume extra buffer into buffer 1
+        let size_rest = size - extra_buffer.len();
         // since we take 2 mut pointers from main_buffer, we have to split_at_mut
-        if buffer2_start < size_rest { error!("size rest too big"); return Err(DecodeError::InvalidChunk); } // debug_assert
-        let (b1, b2) = main_buffer.split_at_mut(buffer2_start);
-        let buffer2 = &mut b2[..buffer2_end-buffer2_start];
-        // finally remaining data into buffer3
+        let (b1, b2) = main_buffer.split_at_mut(main_pos);
+        // first part (in circular order) of main_buffer into buffer2
+        let buffer2_end = min(size_rest, b2.len());
+        let buffer2 = &mut b2[..buffer2_end];
+        // second part (in circular order) of main_buffer into buffer3
+        let size_rest = size_rest.saturating_sub(buffer2_end);
         let buffer3 = &mut b1[..size_rest];
-        let buffer3_pos = buffer1.len() + buffer2.len();
+        let buffer3_pos = extra_buffer.len() + buffer2.len();
         // also return consumed data for the caller to update its index
-        let consumed = buffer2.len() + buffer3.len() + (1-extra_start);
-        Ok((consumed, ScanlineData {
-            filter_type,
-            buffer1,
+        let consumed = buffer2.len() + buffer3.len();
+        let mut scanline = ScanlineData {
+            filter_type: FilterType::None, // default value, will be overridden
+            buffer1: extra_buffer,
             buffer2,
             buffer3,
             buffer3_pos,
             total_size: size,
-        }))
+        };
+        scanline.update_filter_type()?;
+        Ok((consumed, scanline))
     }
-
-    // we ignore scanline size for now, this can produce invalid data if it goes over scanline size
-    // set a single byte of the uffer (this should be forbidden and will be removed)
-    pub fn set(&mut self, index: usize, value: u8) {
-        if index >= self.total_size { info!("set error {} >= {}", index, self.total_size); } // debug_assert
-        if index < self.buffer1.len() {
-            self.buffer1[index] = value;
-        } else if index < self.buffer3_pos {
-            self.buffer2[index-self.buffer1.len()] = value;
-        } else {
-            self.buffer3[index-self.buffer3_pos] = value;
-        }
+    
+    // this cannot be done in new because we need a scanline object to call get()
+    fn update_filter_type(&mut self) -> Result<(), DecodeError> {
+        self.filter_type = FilterType::try_from(self.get(0))
+            .map_err(|_| DecodeError::InvalidFilterType)?;
+        Ok(()) 
     }
 
     // get a single byte of the buffer
-    // TODO get multi bytes
+    // TODO remove ?
     pub fn get(&self, index: usize) -> u8 {
         if index >= self.total_size { info!("get error {} >= {}", index, self.total_size); }
         if index < self.buffer1.len() {
@@ -93,11 +76,147 @@ impl<'a> ScanlineData<'a> {
     }
 
     // copy the data part to a dedicated buffer (this should not be needed in the future)
-    pub fn copy_to_slice(&self, slice: &mut [u8]) {
+    fn copy_to_slice(&self, slice: &mut [u8]) {
         if slice.len() > self.total_size { info!("copy_to_slice error {} >= {}", slice.len(), self.total_size); }
-        slice[..self.buffer1.len()].copy_from_slice(self.buffer1);
-        slice[self.buffer1.len()..self.buffer3_pos].copy_from_slice(self.buffer2);
-        slice[self.buffer3_pos..].copy_from_slice(self.buffer3);
+        if self.buffer1.len() > 0 {
+            slice[..self.buffer1.len()-1].copy_from_slice(&self.buffer1[1..]);
+            slice[self.buffer1.len()-1..self.buffer3_pos-1].copy_from_slice(self.buffer2);
+
+        } else if self.buffer2.len() > 0 {
+            slice[..self.buffer3_pos-1].copy_from_slice(&self.buffer2[1..]);
+            slice[self.buffer3_pos-1..].copy_from_slice(self.buffer3);
+        } else {
+            slice.copy_from_slice(&self.buffer3[1..]);
+        }
+    }
+
+    fn enumerate(&self) -> impl Iterator<Item = (usize, u8)> {
+        self.buffer1.iter()
+            .chain(self.buffer2.iter())
+            .chain(self.buffer3.iter())
+            .copied()
+            .enumerate()
+    }
+
+    // TODO remove
+    fn defilter(&self, top_left: u8, top: u8, left: u8, current: u8) -> u8 {
+        match self.filter_type {
+            FilterType::None => current,
+            FilterType::Sub => current.wrapping_add(left),
+            FilterType::Up => current.wrapping_add(top),
+            FilterType::Average => {
+                let average = (left as u16 + top as u16) / 2;
+                current.wrapping_add(average as u8)
+            },
+            FilterType::Paeth => {
+                let a = left as i16;
+                let b = top as i16;
+                let c = top_left as i16;
+                let p = a + b - c;      // initial estimate
+                let pa = (p - a).abs(); // distances to a, b, c
+                let pb = (p - b).abs();
+                let pc = (p - c).abs();
+                // return nearest of a,b,c,
+                // breaking ties in order a,b,c.
+                let predictor = if pa <= pb && pa <= pc {
+                    left
+                } else if pb <= pc {
+                    top
+                } else {
+                    top_left
+                };
+                current.wrapping_add(predictor)
+            },
+        }
+    }
+
+    // decode scanline data into last scanline buffer
+    pub fn decode(&self, last_scanline: &mut [u8], pixels_per_scanline: usize, bytes_per_pixel: usize) {
+        match self.filter_type {
+            FilterType::None => self.copy_to_slice(last_scanline),
+            FilterType::Sub => {
+                let mut left_pixel = [0_u8; 8];
+                self.enumerate()
+                    .fold(0, |byte, (i,value)| {
+                        let left = left_pixel[byte];
+                        last_scanline[i] = value.wrapping_add(left);
+                        left_pixel[byte] = last_scanline[i];
+                        (byte+1) % bytes_per_pixel
+                    });
+            }
+            FilterType::Up => for (i,value) in self.enumerate() {
+                                  last_scanline[i] = value.wrapping_add(last_scanline[i]);
+                              }
+            FilterType::Average => {
+                let mut left_pixel = [0_u8; 8];
+                self.enumerate()
+                    .fold(0, |byte, (i,value)| {
+                        let left = left_pixel[byte];
+                        let top = last_scanline[i];
+                        // we can either work wit u16 or with u8 and a carry
+                        // let's choose u16
+                        let average = (left as u16 + top as u16) / 2;
+                        last_scanline[i] = value.wrapping_add(average as u8);
+                        left_pixel[byte] = last_scanline[i];
+                        (byte+1) % bytes_per_pixel
+                    });
+            }
+            FilterType::Paeth => {
+                let mut top_left_pixel = [0_u8; 8];
+                let mut left_pixel = [0_u8; 8];
+                self.enumerate()
+                    .fold(0, |byte, (i,value)| {
+                        let a = left_pixel[byte] as i16;
+                        let b = last_scanline[i] as i16;
+                        let c = top_left_pixel[byte] as i16;
+                        let p = a + b - c;      // initial estimate
+                        let pa = (p - a).abs(); // distances to a, b, c
+                        let pb = (p - b).abs();
+                        let pc = (p - c).abs();
+                        // return nearest of a,b,c,
+                        // breaking ties in order a,b,c.
+                        let predictor = if pa <= pb && pa <= pc {
+                            left_pixel[byte]
+                        } else if pb <= pc {
+                            last_scanline[i]
+                        } else {
+                            left_pixel[byte]
+                        };
+                        top_left_pixel[byte] = last_scanline[i];
+                        last_scanline[i] = value.wrapping_add(predictor);
+                        left_pixel[byte] = last_scanline[i];
+                        (byte+1) % bytes_per_pixel
+                    });
+            }
+        }
+    }
+
+    // TODO remove
+    // decode scanline data into last scanline buffer
+    pub fn decode0(&self, last_scanline: &mut [u8], pixels_per_scanline: usize, bytes_per_pixel: usize) {
+        // store defiltered data into last_scanline
+        // since it already contains last scanline data,
+        // we need to keep 3 pixels elsewhere for defiltering
+        // and write them later (left, top, top-left)
+
+        // rust array must be allocated at compile time, so we use the max bpp value
+        let mut left = [0_u8; 8];
+        let mut top_left = [0_u8; 8];
+        let mut top = [0_u8; 8];
+
+        // defilter is applied on bytes, but for matching bytes of different pixels
+        // so we do a double iteration
+        for i in 0..pixels_per_scanline {
+            let pos = i * bytes_per_pixel;
+            for j in 0..bytes_per_pixel {
+                top[j] = last_scanline[pos+j];
+                let current = self.get(pos+j+1);
+                let defiltered = self.defilter(top_left[j], top[j], left[j], current);
+                last_scanline[pos+j] = defiltered;
+                top_left[j] = top[j];
+                left[j] = defiltered;
+            }
+        }
     }
 }
 
@@ -199,7 +318,6 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
 
     // produce a single scanline of given size from the buffer, assuming it has enough data
     fn scanline(&mut self, size: usize) -> Result<ScanlineData, DecodeError> {
-        let len =  self.buffer.len();
         let start_pos = if self.buffer_count > self.buffer_pos {
             self.data_chunks.len() - self.buffer_count + self.buffer_pos
         } else {
@@ -217,7 +335,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
     // get the next scanline, extracting data with the decompressor if needed
     pub fn get_scanline(&mut self, size: usize) -> Result<Option<ScanlineData>, DecodeError> {
         // we already have enough data
-        if self.buffer_count + self.extra_count >= size + 1 {
+        if self.buffer_count + self.extra_count >= size {
             return Ok(Some(self.scanline(size)?));
         }
 

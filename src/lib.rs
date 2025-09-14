@@ -1,3 +1,5 @@
+//! DOC not suitable for 16bits usize
+
 mod png;
 mod error;
 mod types;
