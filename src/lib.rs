@@ -14,7 +14,8 @@ use embedded_graphics_core::{pixelcolor::PixelColor,
                              primitives::Rectangle};
 use embedded_graphics_core::geometry::Point;
 use png_decoder::{pre_decode, PngHeader, DecodeError, UndecodedPng};
-use crate::png::ParsedPng;
+pub use crate::png::ParsedPng;
+pub use crate::png::PngReader;
 
 pub type Png<C> = BufferedPng<C>;
 

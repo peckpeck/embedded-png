@@ -1,5 +1,6 @@
 use core::convert::{TryFrom, TryInto};
 use crc32fast::Hasher;
+use embedded_graphics_core::pixelcolor::PixelColor;
 use crate::error::DecodeError;
 use crate::inflate::{ChunkDecompressor, ScanlineData};
 use crate::read_u32;
@@ -230,18 +231,25 @@ impl<'src> Chunk<'src> {
     }
 }
 
-pub struct DecodedScanline<'buf> {
+// TODO remove
+#[inline(always)]
+fn u16_to_u8(val: u16) -> u8 {
+    (val >> 8) as u8
+}
+
+pub struct DecodedScanline<'a, 'src, 'buf> {
+    png: &'a ParsedPng<'src>,
     scanline_data: &'buf [u8],
     pass: Option<usize>,
     y: usize,
 }
 
-impl<'buf> DecodedScanline<'buf> {
-    pub fn new_linear(scanline_data: &'buf [u8], y: usize) -> Self {
-        DecodedScanline { scanline_data, pass: None, y }
+impl<'a, 'src, 'buf> DecodedScanline<'a, 'src, 'buf> {
+    pub fn new_linear(png: &'a ParsedPng<'src>, scanline_data: &'buf [u8], y: usize) -> Self {
+        DecodedScanline { png, scanline_data, pass: None, y }
     }
-    pub fn new_interlaced(scanline_data: &'buf [u8], y: usize, pass: usize) -> Self {
-        DecodedScanline { scanline_data, pass: Some(pass), y }
+    pub fn new_interlaced(png: &'a ParsedPng<'src>, scanline_data: &'buf [u8], y: usize, pass: usize) -> Self {
+        DecodedScanline { png, scanline_data, pass: Some(pass), y }
     }
     pub fn get_xy(&self, x: usize) -> (usize, usize) {
         match self.pass {
@@ -256,65 +264,334 @@ impl<'buf> DecodedScanline<'buf> {
             _ => (0, 0),
         }
     }
-    pub fn get_pixel(&self, x: usize) -> bool {
-        self.pass.is_none()
+    pub fn get_color(&self, x: usize) -> Option<(u8,u8,u8,u8)> {
+        match self.png.pixel_type {
+            PixelType::Grayscale1 => {
+                let byte = self.scanline_data[x / 8];
+                let bit_offset = 7 - x % 8;
+                let grayscale_val = (byte >> bit_offset) & 1;
+
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Grayscale(transparent_val))
+                    if grayscale_val == transparent_val =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+
+                let pixel_val = grayscale_val * 255;
+
+                Some((pixel_val, pixel_val, pixel_val, alpha))
+            },
+            PixelType::Grayscale2 => {
+                let byte = self.scanline_data[x / 4];
+                let bit_offset = 6 - ((x % 4) * 2);
+                let grayscale_val = (byte >> bit_offset) & 0b11;
+
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Grayscale(transparent_val))
+                    if grayscale_val == transparent_val =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+
+                // TODO - use a lookup table
+                let pixel_val = ((grayscale_val as f32 / 3.0) * 255.0) as u8;
+
+                Some((pixel_val, pixel_val, pixel_val, alpha))
+            },
+            PixelType::Grayscale4 => {
+                let byte = self.scanline_data[x / 2];
+                let bit_offset = 4 - ((x % 2) * 4);
+                let grayscale_val = (byte >> bit_offset) & 0b1111;
+
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Grayscale(transparent_val))
+                    if grayscale_val == transparent_val =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+
+                // TODO - use a lookup table
+                let pixel_val = ((grayscale_val as f32 / 15.0) * 255.0) as u8;
+                Some((pixel_val, pixel_val, pixel_val, alpha))
+            },
+            PixelType::Grayscale8 => {
+                let byte = self.scanline_data[x];
+
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Grayscale(transparent_val))
+                    if byte == transparent_val =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+                Some((byte, byte, byte, alpha))
+            },
+            PixelType::Grayscale16 => {
+                let offset = x * 2;
+                let grayscale_val =
+                    u16::from_be_bytes([self.scanline_data[offset], self.scanline_data[offset + 1]]);
+
+                let pixel_val = u16_to_u8(grayscale_val);
+
+                // TODO(bschwind) - This may need to be compared to the original
+                //                  16-bit transparency value, instead of the transformed
+                //                  8-bit value.
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Grayscale(transparent_val))
+                    if pixel_val == transparent_val =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+
+                Some((pixel_val, pixel_val, pixel_val, alpha))
+            },
+            PixelType::Rgb8 => {
+                let offset = x * 3;
+                let r = self.scanline_data[offset];
+                let g = self.scanline_data[offset + 1];
+                let b = self.scanline_data[offset + 2];
+
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Rgb(t_r, t_g, t_b))
+                    if r == t_r && g == t_g && b == t_b =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+
+                Some((r, g, b, alpha))
+            },
+            PixelType::Rgb16 => {
+                let offset = x * 6;
+                let r = u16::from_be_bytes([self.scanline_data[offset], self.scanline_data[offset + 1]]);
+                let g = u16::from_be_bytes([self.scanline_data[offset + 2], self.scanline_data[offset + 3]]);
+                let b = u16::from_be_bytes([self.scanline_data[offset + 4], self.scanline_data[offset + 5]]);
+
+                let r = u16_to_u8(r);
+                let g = u16_to_u8(g);
+                let b = u16_to_u8(b);
+
+                let alpha = match self.png.transparency {
+                    Some(TransparencyChunk::Rgb(t_r, t_g, t_b))
+                    if r == t_r && g == t_g && b == t_b =>
+                        {
+                            0
+                        },
+                    _ => 255,
+                };
+
+                Some((r, g, b, alpha))
+            },
+            PixelType::Palette1 => {
+                let byte = self.scanline_data[x / 8];
+                let bit_offset = 7 - x % 8;
+                let palette_idx = ((byte >> bit_offset) & 1) as usize;
+
+                let offset = palette_idx * 3;
+
+                let palette = self.png.palette.unwrap();
+                let r = palette[offset];
+                let g = palette[offset + 1];
+                let b = palette[offset + 2];
+
+                let alpha: u8 = match self.png.transparency {
+                    Some(TransparencyChunk::Palette(data)) => {
+                        *data.get(palette_idx).unwrap_or(&255)
+                    },
+                    Some(_) | None => 255,
+                };
+
+                Some((r, g, b, alpha))
+            },
+            PixelType::Palette2 => {
+                let byte = self.scanline_data[x / 4];
+                let bit_offset = 6 - ((x % 4) * 2);
+                let palette_idx = ((byte >> bit_offset) & 0b11) as usize;
+
+                let offset = palette_idx * 3;
+
+                let palette = self.png.palette.unwrap();
+                let r = palette[offset];
+                let g = palette[offset + 1];
+                let b = palette[offset + 2];
+
+                let alpha: u8 = match self.png.transparency {
+                    Some(TransparencyChunk::Palette(data)) => {
+                        *data.get(palette_idx).unwrap_or(&255)
+                    },
+                    Some(_) | None => 255,
+                };
+
+                Some((r, g, b, alpha))
+            },
+            PixelType::Palette4 => {
+                let byte = self.scanline_data[x / 2];
+                let bit_offset = 4 - ((x % 2) * 4);
+                let palette_idx = ((byte >> bit_offset) & 0b1111) as usize;
+
+                let offset = palette_idx * 3;
+
+                let palette = self.png.palette.unwrap();
+                let r = palette[offset];
+                let g = palette[offset + 1];
+                let b = palette[offset + 2];
+
+                let alpha: u8 = match self.png.transparency {
+                    Some(TransparencyChunk::Palette(data)) => {
+                        *data.get(palette_idx).unwrap_or(&255)
+                    },
+                    Some(_) | None => 255,
+                };
+
+                Some((r, g, b, alpha))
+            },
+            PixelType::Palette8 => {
+                let offset = self.scanline_data[x] as usize * 3;
+
+                let palette = self.png.palette.unwrap();
+                let r = palette[offset];
+                let g = palette[offset + 1];
+                let b = palette[offset + 2];
+
+                let alpha: u8 = match self.png.transparency {
+                    Some(TransparencyChunk::Palette(data)) => *data.get(offset).unwrap_or(&255),
+                    Some(_) | None => 255,
+                };
+
+                Some((r, g, b, alpha))
+            },
+            PixelType::GrayscaleAlpha8 => {
+                let offset = x * 2;
+                let grayscale_val = self.scanline_data[offset];
+                let alpha = self.scanline_data[offset + 1];
+
+                Some((grayscale_val, grayscale_val, grayscale_val, alpha))
+            },
+            PixelType::GrayscaleAlpha16 => {
+                let offset = x * 4;
+                let grayscale_val =
+                    u16::from_be_bytes([self.scanline_data[offset], self.scanline_data[offset + 1]]);
+                let alpha =
+                    u16::from_be_bytes([self.scanline_data[offset + 2], self.scanline_data[offset + 3]]);
+
+                let grayscale_val = u16_to_u8(grayscale_val);
+                let alpha = u16_to_u8(alpha);
+
+                Some((grayscale_val, grayscale_val, grayscale_val, alpha))
+            },
+            PixelType::RgbAlpha8 => {
+                let offset = x * 4;
+                let r = self.scanline_data[offset];
+                let g = self.scanline_data[offset + 1];
+                let b = self.scanline_data[offset + 2];
+                let a = self.scanline_data[offset + 3];
+
+                Some((r, g, b, a))
+            },
+            PixelType::RgbAlpha16 => {
+                let offset = x * 8;
+                let r = u16::from_be_bytes([self.scanline_data[offset], self.scanline_data[offset + 1]]);
+                let g = u16::from_be_bytes([self.scanline_data[offset + 2], self.scanline_data[offset + 3]]);
+                let b = u16::from_be_bytes([self.scanline_data[offset + 4], self.scanline_data[offset + 5]]);
+                let a = u16::from_be_bytes([self.scanline_data[offset + 6], self.scanline_data[offset + 7]]);
+
+                let r = u16_to_u8(r);
+                let g = u16_to_u8(g);
+                let b = u16_to_u8(b);
+                let a = u16_to_u8(a);
+
+                Some((r, g, b, a))
+            },
+        }
     }
 
 }
 
-pub struct PngReader<'src, 'buf> {
-    header: PngHeader,
+pub struct PngReader<'a, 'src, 'buf> {
+    png: &'a ParsedPng<'src>,
     decompressor: ChunkDecompressor<'src, 'buf>,
-    pixel_type: PixelType,
-    palette: Option<&'src [u8]>,
-    transparency: Option<TransparencyChunk<'src>>,
-    background: Option<&'src [u8]>,
     last_scanline: &'buf mut [u8],
     next_pass: usize, // only for interlace method
     next_y: usize,
+/*    header: PngHeader,
+    pixel_type: PixelType,
+    palette: Option<&'src [u8]>,
+    transparency: Option<TransparencyChunk<'src>>,
+    background: Option<&'src [u8]>, // TODO
+    last_scanline: &'buf mut [u8],
+    next_pass: usize, // only for interlace method
+    next_y: usize,*/
 }
 
-impl<'src, 'buf> PngReader<'src, 'buf> {
+impl<'a, 'src, 'buf> PngReader<'a, 'src, 'buf> {
     // we assume that last_scanline is zero initialized
-    pub fn from_parsed_png(parsed_png: ParsedPng<'src>, buffer: &'buf mut [u8],
+    pub fn from_parsed_png(parsed_png: &'a ParsedPng<'src>, buffer: &'buf mut [u8],
                            buffer_extra: &'buf mut [u8], last_scanline: &'buf mut [u8]) -> Result<Self, DecodeError> {
         let ParsedPng { header, pixel_type,
             palette, transparency,
             background, crc_checked, data_chunks } = parsed_png;
 
         let decompressor = ChunkDecompressor::new(
-            data_chunks, buffer, buffer_extra, crc_checked
+            data_chunks, buffer, buffer_extra, parsed_png.crc_checked
         );
         Ok(PngReader {
-            header,
+            /*            header,
+                        decompressor,
+                        pixel_type,
+                        palette,
+                        transparency,
+                        background,
+                        last_scanline,
+                        next_y: 0,
+                        next_pass: 1,
+            */
+            png: parsed_png,
             decompressor,
-            pixel_type,
-            palette,
-            transparency,
-            background,
             last_scanline,
-            next_y: 0,
-            next_pass: 1,
+            next_pass: 0,
+            next_y: 1,
         })
     }
 
+    /*
+    fn get_scanline<'b: 'buf>(&'b mut self, bytes_per_scanline: usize, bytes_per_pixel: usize) -> Result<(), DecodeError>  {
+        if let Some(scanline) = self.decompressor.get_scanline(bytes_per_scanline+1)? {
+            log::info!("None2");
+            self.next_y += 1;
+            // store defiltered data into last_scanline
+            scanline.decode(self.last_scanline, bytes_per_pixel);
+            Ok(())
+        } else {
+            log::info!("None ERR");
+            Err(DecodeError::MissingBytes) // TODO Missing scanline err
+        }
+
+    }*/
+
     // TODO: understand why we need 'a here
     // self.next_y and self.next_pass must be kept before calling this, they are invalid just after (todo ?)
-    pub fn next_scanline<'a: 'buf>(&'a mut self) -> Result<DecodedScanline<'buf>, DecodeError> {
-        let bytes_per_pixel = self.header.bytes_per_pixel();
-        match self.header.interlace_method {
+    pub fn next_scanline<'b>(&'b mut self) -> Result<DecodedScanline<'a, 'src, 'buf>, DecodeError> {
+        let bytes_per_pixel = self.png.header.bytes_per_pixel();
+        match self.png.header.interlace_method {
             InterlaceMethod::None => {
-                let bytes_per_scanline = self.header.bytes_per_scanline_max()?; // TODO remove error case
-                if let Some(scanline) = self.decompressor.get_scanline(bytes_per_scanline)? {
-                    let y = self.next_y;
-                    let pixels_per_scanline = bytes_per_scanline / bytes_per_pixel;
-                    self.next_y += 1;
-                    // store defiltered data into last_scanline
-                    scanline.decode(self.last_scanline, pixels_per_scanline, bytes_per_pixel);
-                    Ok(DecodedScanline::new_linear(self.last_scanline, y))
-                } else {
-                    Err(DecodeError::MissingBytes) // TODO Missing scanline err
-                }
+                log::info!("None");
+                let bytes_per_scanline = self.png.header.bytes_per_scanline_max()?; // TODO remove error case
+                log::info!("None1");
+                let y = self.next_y;
+                self.decompressor.decode_next_scanline(&mut self.last_scanline, bytes_per_pixel)?;
+                self.next_y += 1;
+                Ok(DecodedScanline::new_linear(self.png, self.last_scanline, y))
             },
             InterlaceMethod::Adam7 => {
                 // Adam7 Interlacing Pattern
@@ -327,34 +604,51 @@ impl<'src, 'buf> PngReader<'src, 'buf> {
                 // 5 6 5 6 5 6 5 6
                 // 7 7 7 7 7 7 7 7
                 let pass = self.next_pass;
-                let (pass_width, pass_height) = self.header.pass_info(pass);
-                let bytes_per_scanline = pass_width as usize * bytes_per_pixel;
-                if let Some(scanline) = self.decompressor.get_scanline(bytes_per_scanline)? {
-                    let y = self.next_y;
-                    let pixels_per_scanline = bytes_per_scanline / bytes_per_pixel;
-
-                    self.next_y += 1;
-                    if self.next_y > pass_height {
-                        loop {
-                            self.next_pass += 1;
-                            if self.next_pass == 8 {
-                                self.next_pass = 1;
-                            }
-                            // Skip empty passes.
-                            let (pass_width, pass_height) = self.header.pass_info(self.next_pass);
-                            if pass_width != 0 && pass_height != 0 {
-                                // TODO reset last scanline on new passes
-                                break;
-                            }
-                        };
-                    }
-
-                    scanline.decode(self.last_scanline, pixels_per_scanline, bytes_per_pixel);
-                    Ok(DecodedScanline::new_interlaced(self.last_scanline, y, pass))
-                } else {
-                    Err(DecodeError::MissingBytes) // TODO Missing scanline err
+                let (pass_width, pass_height) = self.png.header.pass_info(pass);
+                let bytes_per_scanline = pass_width * bytes_per_pixel;
+                let y = self.next_y;
+                self.decompressor.decode_next_scanline(&mut self.last_scanline, bytes_per_pixel)?;
+                self.next_y += 1;
+                if self.next_y > pass_height {
+                    loop {
+                        self.next_pass += 1;
+                        if self.next_pass == 8 {
+                            self.next_pass = 1; // this means the end
+                        }
+                        // Skip empty passes (the reason for loop existence)
+                        let (pass_width, pass_height) = self.png.header.pass_info(self.next_pass);
+                        if pass_width != 0 && pass_height != 0 {
+                            // TODO reset last scanline on new passes
+                            break;
+                        }
+                    };
                 }
+                // TODO limit scanline width
+                Ok(DecodedScanline::new_interlaced(self.png, self.last_scanline, y, pass))
             },
         }
     }
 }
+
+
+/*
+pub struct ColorIterator<'src, 'buf> {
+    reader: PngReader<'src, 'buf>,
+    scanline: Option<DecodedScanline<'buf>,
+    x: usize,
+}
+
+impl<'src, 'buf> Iterator for ColorIterator<'src, 'buf> {
+    // first try
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
+
+pub struct PixelIterator<'src, 'buf> {
+    reader: PngReader<'src, 'buf>,
+    x: usize,
+}
+ */
