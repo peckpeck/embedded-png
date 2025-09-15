@@ -1,5 +1,7 @@
 //! DOC not suitable for 16bits usize
 
+extern crate core;
+
 mod png;
 mod error;
 mod types;
@@ -16,6 +18,7 @@ use embedded_graphics_core::geometry::Point;
 use png_decoder::{pre_decode, PngHeader, DecodeError, UndecodedPng};
 pub use crate::png::ParsedPng;
 pub use crate::png::PngReader;
+pub use crate::inflate::ChunkDecompressor;
 
 pub type Png<C> = BufferedPng<C>;
 

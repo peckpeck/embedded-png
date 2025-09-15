@@ -397,12 +397,12 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
         }
     }
 
-    fn enumerate(&self) -> impl Iterator<Item = (usize, u8)> {
-        let end = min(self.data_pos + self.buffer_count, self.buffer.len());
+    fn enumerate(&self, count: usize) -> impl Iterator<Item = (usize, u8)> {
+        let end = min(self.data_pos + count, self.buffer.len());
         self.buffer_extra[..self.extra_count].iter()
             .chain(self.buffer[self.data_pos..end].iter())
-            .chain(if end < self.data_pos + self.buffer_count {
-                self.buffer[0..end-self.data_pos - self.buffer_count].iter()
+            .chain(if end == self.buffer.len() {
+                self.buffer[0..count-(self.buffer.len()-self.data_pos)].iter()
             } else {
                 [].iter()
             })
@@ -420,7 +420,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             FilterType::None => self.copy_to_slice(last_scanline),
             FilterType::Sub => {
                 let mut left_pixel = [0_u8; 8];
-                self.enumerate()
+                self.enumerate(last_scanline.len())
                     .fold(0, |byte, (i,value)| {
                         let left = left_pixel[byte];
                         last_scanline[i] = value.wrapping_add(left);
@@ -428,12 +428,12 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
                         (byte+1) % bytes_per_pixel
                     });
             }
-            FilterType::Up => for (i,value) in self.enumerate() {
+            FilterType::Up => for (i,value) in self.enumerate(last_scanline.len()) {
                 last_scanline[i] = value.wrapping_add(last_scanline[i]);
             }
             FilterType::Average => {
                 let mut left_pixel = [0_u8; 8];
-                self.enumerate()
+                self.enumerate(last_scanline.len())
                     .fold(0, |byte, (i,value)| {
                         let left = left_pixel[byte];
                         let top = last_scanline[i];
@@ -448,7 +448,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             FilterType::Paeth => {
                 let mut top_left_pixel = [0_u8; 8];
                 let mut left_pixel = [0_u8; 8];
-                self.enumerate()
+                self.enumerate(last_scanline.len())
                     .fold(0, |byte, (i,value)| {
                         let a = left_pixel[byte] as i16;
                         let b = last_scanline[i] as i16;
