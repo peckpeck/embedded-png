@@ -6,6 +6,7 @@ mod png;
 mod error;
 mod types;
 mod inflate;
+mod colors;
 
 use embedded_graphics_core::{pixelcolor::PixelColor,
                              pixelcolor::Rgb888,
@@ -17,7 +18,6 @@ use embedded_graphics_core::{pixelcolor::PixelColor,
 use embedded_graphics_core::geometry::Point;
 use png_decoder::{pre_decode, PngHeader, DecodeError, UndecodedPng};
 pub use crate::png::ParsedPng;
-pub use crate::png::PngReader;
 pub use crate::inflate::ChunkDecompressor;
 
 pub type Png<C> = BufferedPng<C>;

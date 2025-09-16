@@ -3,186 +3,29 @@ use log::{error, info};
 use miniz_oxide::inflate::core::{decompress, DecompressorOxide};
 use miniz_oxide::inflate::core::inflate_flags::{TINFL_FLAG_COMPUTE_ADLER32, TINFL_FLAG_HAS_MORE_INPUT, TINFL_FLAG_PARSE_ZLIB_HEADER};
 use miniz_oxide::inflate::TINFLStatus;
+use tracing::debug_span;
 use crate::error::DecodeError;
 use crate::png::Chunk;
 use crate::types::{ChunkType, FilterType};
 
-/// A single PNG scanline that points to decompressor buffer data
-pub struct ScanlineData<'buf> {
-    // scanline filter type cache (todo remove)
-    filter_type: FilterType,
-    // a scanline spans at most 3 buffers because the decompressor uses a Q buffer
-    buffer1: &'buf [u8],
-    buffer2: &'buf [u8],
-    buffer3: &'buf [u8],
-    // optimization to avoid computing position all the time
-    buffer3_pos: usize,
-    // used for bound checking only, TODO maybe remove
-    total_size: usize,
-}
-
-/// A single PNG scanline that points to decompressor buffer data
-pub struct ScanlineRef {
-    extra_buffer_start: usize,
-    main_buffer_start: usize,
-}
-
-impl<'buf> ScanlineData<'buf> {
-    // create a scanline from the Q buffer
-    // returns the size of the consumed data from main buffer
-    fn new(extra_buffer: &'buf [u8], main_buffer: &'buf [u8], main_pos: usize, size: usize) -> Result<(usize, Self), DecodeError> {
-        // data is taken from extra_buffer them from main_buffer
-        // - extra_buffer if fully consumed
-        // - remaining bytes are taken from main buffer
-        // - in potentially 2 steps if it spans past the end of the allocated memory
-        if extra_buffer.len() > size { error!("Extra buffer too big {}", extra_buffer.len()); } // debug_assert
-        // first consume extra buffer into buffer 1
-        let size_rest = size - extra_buffer.len();
-        // since we take 2 mut pointers from main_buffer, we have to split_at_mut
-        let (b1, b2) = main_buffer.split_at(main_pos);
-        // first part (in circular order) of main_buffer into buffer2
-        let buffer2_end = min(size_rest, b2.len());
-        let buffer2 = &b2[..buffer2_end];
-        // second part (in circular order) of main_buffer into buffer3
-        let size_rest = size_rest.saturating_sub(buffer2_end);
-        let buffer3 = &b1[..size_rest];
-        let buffer3_pos = extra_buffer.len() + buffer2.len();
-        // also return consumed data for the caller to update its index
-        let consumed = buffer2.len() + buffer3.len();
-        let mut scanline = ScanlineData {
-            filter_type: FilterType::None, // default value, will be overridden
-            buffer1: extra_buffer,
-            buffer2,
-            buffer3,
-            buffer3_pos,
-            total_size: size,
-        };
-        scanline.update_filter_type()?;
-        Ok((consumed, scanline))
-    }
-    
-    // this cannot be done in new because we need a scanline object to call get()
-    fn update_filter_type(&mut self) -> Result<(), DecodeError> {
-        self.filter_type = FilterType::try_from(self.get(0))
-            .map_err(|_| DecodeError::InvalidFilterType)?;
-        Ok(()) 
-    }
-
-    // get a single byte of the buffer
-    // TODO remove ?
-    fn get(&self, index: usize) -> u8 {
-        if index >= self.total_size { info!("get error {} >= {}", index, self.total_size); }
-        if index < self.buffer1.len() {
-            self.buffer1[index]
-        } else if index < self.buffer3_pos {
-            self.buffer2[index-self.buffer1.len()]
-        } else {
-            self.buffer3[index-self.buffer3_pos]
-        }
-    }
-
-    // copy the data part to a dedicated buffer (this should not be needed in the future)
-    fn copy_to_slice(&self, slice: &mut [u8]) {
-        if slice.len() > self.total_size { info!("copy_to_slice error {} >= {}", slice.len(), self.total_size); }
-        if self.buffer1.len() > 0 {
-            slice[..self.buffer1.len()-1].copy_from_slice(&self.buffer1[1..]);
-            slice[self.buffer1.len()-1..self.buffer3_pos-1].copy_from_slice(self.buffer2);
-
-        } else if self.buffer2.len() > 0 {
-            slice[..self.buffer3_pos-1].copy_from_slice(&self.buffer2[1..]);
-            slice[self.buffer3_pos-1..].copy_from_slice(self.buffer3);
-        } else {
-            slice.copy_from_slice(&self.buffer3[1..]);
-        }
-    }
-
-    fn enumerate(&self) -> impl Iterator<Item = (usize, u8)> {
-        self.buffer1.iter()
-            .chain(self.buffer2.iter())
-            .chain(self.buffer3.iter())
-            .skip(1)
-            .copied()
-            .enumerate()
-    }
-
-    // decode scanline data into last scanline buffer
-    pub fn decode(&self, last_scanline: &mut [u8], bytes_per_pixel: usize) {
-        match self.filter_type {
-            FilterType::None => self.copy_to_slice(last_scanline),
-            FilterType::Sub => {
-                let mut left_pixel = [0_u8; 8];
-                self.enumerate()
-                    .fold(0, |byte, (i,value)| {
-                        let left = left_pixel[byte];
-                        last_scanline[i] = value.wrapping_add(left);
-                        left_pixel[byte] = last_scanline[i];
-                        (byte+1) % bytes_per_pixel
-                    });
-            }
-            FilterType::Up => for (i,value) in self.enumerate() {
-                                  last_scanline[i] = value.wrapping_add(last_scanline[i]);
-                              }
-            FilterType::Average => {
-                let mut left_pixel = [0_u8; 8];
-                self.enumerate()
-                    .fold(0, |byte, (i,value)| {
-                        let left = left_pixel[byte];
-                        let top = last_scanline[i];
-                        // we can either work wit u16 or with u8 and a carry
-                        // let's choose u16
-                        let average = (left as u16 + top as u16) / 2;
-                        last_scanline[i] = value.wrapping_add(average as u8);
-                        left_pixel[byte] = last_scanline[i];
-                        (byte+1) % bytes_per_pixel
-                    });
-            }
-            FilterType::Paeth => {
-                let mut top_left_pixel = [0_u8; 8];
-                let mut left_pixel = [0_u8; 8];
-                self.enumerate()
-                    .fold(0, |byte, (i,value)| {
-                        let a = left_pixel[byte] as i16;
-                        let b = last_scanline[i] as i16;
-                        let c = top_left_pixel[byte] as i16;
-                        let p = a + b - c;      // initial estimate
-                        let pa = (p - a).abs(); // distances to a, b, c
-                        let pb = (p - b).abs();
-                        let pc = (p - c).abs();
-                        // return nearest of a,b,c,
-                        // breaking ties in order a,b,c.
-                        let predictor = if pa <= pb && pa <= pc {
-                            left_pixel[byte]
-                        } else if pb <= pc {
-                            last_scanline[i]
-                        } else {
-                            left_pixel[byte]
-                        };
-                        top_left_pixel[byte] = last_scanline[i];
-                        last_scanline[i] = value.wrapping_add(predictor);
-                        left_pixel[byte] = last_scanline[i];
-                        (byte+1) % bytes_per_pixel
-                    });
-            }
-        }
-    }
-}
-
 /// The decompressor is implemented as a Q buffer
 /// Q because it is a circular buffer + a linear buffer, which if you draw them, looks like a Q
+///
 /// Data is always decompressed in the circular buffer, but since the whole circular buffer
 /// might be needed  when extracting new data, we temporarily store remaining data
 /// in the linear buffer.
-/// All of this would not be needed if we could control the maximum data that must be decompressed
+///
+/// The linear part would not be needed if we could control the maximum data that must be decompressed
 pub struct ChunkDecompressor<'src, 'buf> {
     // internal miniz decompressor data
     decompressor: DecompressorOxide,
-    // slice containing ImageData chunks
+    // slice containing all ImageData chunks
     data_chunks: &'src [u8],
     // position of the next chunk in this slice
     next_chunk_start: Option<usize>,
-    // slice of the current data chunk
+    // slice of the current data chunks
     current_chunk: Option<&'src [u8]>,
-    // true when all data have been taken from chunk
+    // true when all data have been taken from chunks
     chunk_end: bool,
     // circular buffer where decompressed data is written
     buffer: &'buf mut [u8],
@@ -196,14 +39,16 @@ pub struct ChunkDecompressor<'src, 'buf> {
     extra_count: usize,
     // common flags for decompression
     flags: u32,
+    total_decompressed: usize, // TODO remove
+    // TODO should we have a next_scanline_size here ?
 }
 
 impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
-    // buffer size must be >= min(32k, total_output size)
+    // buffer size must be >= min(decompression_window(32k), total_output_size)
     // buffer extra size must be >= max scanline bytes
     pub fn new(data_chunks: &'src [u8], buffer: &'buf mut [u8], buffer_extra: &'buf mut [u8], check_crc: bool) -> Self {
         let decompressor = DecompressorOxide::new();
-        // png has zlib header, always pass has more input, it doesn't matter it it's wrong
+        // png has zlib header, always pass has more input, it doesn't matter if it's false
         let mut flags = TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_HAS_MORE_INPUT;
         if check_crc {
             flags |= TINFL_FLAG_COMPUTE_ADLER32;
@@ -220,18 +65,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             buffer_extra,
             extra_count: 0,
             flags,
-        }
-    }
-
-    // check if end of input has been reached and update flag accordingly
-    fn check_for_end(&mut self) {
-        // we have some data for sure
-        if let Some(chunk) = self.current_chunk && !chunk.is_empty() {
-            return;
-        }
-        if self.next_chunk_start.is_none() {
-            // we truly reached the end
-            self.chunk_end = true;
+            total_decompressed: 0,
         }
     }
 
@@ -246,7 +80,12 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             if let Some(next_start) = self.next_chunk_start && next_start < self.data_chunks.len() {
                 // it was already checked during first parse, so we can unwrap, and avoid crc check
                 let next_chunk = Chunk::from_bytes(self.data_chunks, next_start, false).unwrap();
-                self.next_chunk_start = Some(next_chunk.end);
+                if next_chunk.end < self.data_chunks.len() {
+                    self.next_chunk_start = Some(next_chunk.end);
+                } else {
+                    // TODO smelly, we assign none at 2 different steps
+                    self.next_chunk_start = None;
+                }
                 if next_chunk.chunk_type == ChunkType::ImageData {
                     if !next_chunk.data.is_empty() {
                         self.current_chunk = Some(next_chunk.data);
@@ -263,26 +102,11 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
         }
     }
 
-    /*
-    // TODO lifetime
-    // produce a single scanline of given size from the buffer, assuming it has enough data
-    fn scanline<'a: 'buf>(&'a mut self, size: usize) -> Result<ScanlineData<'buf>, DecodeError> {
-        let start_pos = if self.buffer_count > self.buffer_pos {
-            self.buffer.len() - self.buffer_count + self.buffer_pos
-        } else {
-            self.buffer_pos - self.buffer_count
-        };
-        let (consumed, scanline) =
-            ScanlineData::new(&self.buffer_extra[..self.extra_count],
-                              self.buffer,
-                              start_pos, size)?;
-        //self.extra_count = 0;
-        //self.buffer_count -= consumed;
-        Ok(scanline)
-    }*/
-
     // get the next scanline, extracting data with the decompressor if needed
+    //#[tracing::instrument(skip_all)]
     fn get_enough_data(&mut self, size: usize) -> Result<(), DecodeError> {
+        debug_assert!(size <= self.buffer.len(), "Decompression buffer too small (need {})", size);
+        debug_assert!(size >= self.extra_count, "Decompression extra buffer too big (need {})", size);
         // we already have enough data
         if self.buffer_count + self.extra_count >= size {
             return Ok(());
@@ -293,10 +117,10 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
         let mut buffer_pos = self.buffer_count + self.data_pos;
 
         // since decompress() does not cross the buffer wrap but can grow through the end
-        // we must save any data that is after buffer_pos
-        if buffer_pos > self.buffer.len() {
+        // we must save any data that is after buffer_pos and before buffer.len()
+        if buffer_pos >= self.buffer.len() {
             buffer_pos -= self.buffer.len();
-            // save what's after the new buffer_pos
+            // save what's after the new buffer_pos (between data_pos and buffer.len())
             let data_count = self.buffer.len() - self.data_pos;
             let new_extra_count = self.extra_count + data_count;
             // there is no overflow since buffer_extra has enough data for a single scanline
@@ -324,12 +148,17 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             );
 
         // account for byte read
-        self.current_chunk.as_mut().map(|chunk| &chunk[in_count..]);
-        self.check_for_end();
+        if let Some(chunk) = &mut self.current_chunk {
+            *chunk = &(*chunk)[in_count..];
+            if chunk.is_empty() && self.next_chunk_start.is_none() {
+                self.chunk_end = true;
+            }
+        }
 
         // account for bytes written
         self.buffer_count += out_count;
-        if buffer_pos + out_count > self.buffer.len() { info!("decompress wrapped around"); } // debbug_assert
+        self.total_decompressed += out_count;
+        debug_assert!(buffer_pos + out_count <= self.buffer.len(), "decompress wrapped around");
 
         // account for errors
         if (status as i32) < 0 {
@@ -337,9 +166,11 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
         }
         match status {
             TINFLStatus::Done => if !self.chunk_end {
-                return Err(DecodeError::InvalidChunk);
+                info!("Done without end");
+                //return Err(DecodeError::InvalidChunk);
             }
             TINFLStatus::NeedsMoreInput => if self.chunk_end {
+                info!("End with more input");
                 return Err(DecodeError::InvalidChunk);
             }
             // TINFLStatus::HasMoreOutput is handled gracefully by decompress on next run
@@ -348,6 +179,18 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
 
         // rerun to avoid duplicating logic
         self.get_enough_data(size)
+    }
+
+    // remove size bytes from buffer
+    fn remove_data(&mut self, size: usize) {
+        debug_assert!(size >= self.extra_count, "Decompression extra buffer too big to remove (need {})", size);
+        let main_buffer_count = size - self.extra_count;
+        self.data_pos += main_buffer_count;
+        if self.data_pos >= self.buffer.len() {
+            self.data_pos -= self.buffer.len();
+        }
+        self.buffer_count -= main_buffer_count;
+        self.extra_count = 0;
     }
 
     // extract a filter type from first data byte
@@ -360,15 +203,17 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
         FilterType::try_from(byte).map_err(|_| DecodeError::InvalidFilterType)
     }
 
-    // copy the whole scanline_data to slice
+    // copy the whole scanline_data to slice,
+    // starting at decompressed pos + 1 : because we do not copy the filter type
+    // we copy target len bytes
     fn copy_to_slice(&self, target: &mut [u8]) {
         let count = target.len();
-        if count + 1 > self.buffer_count + self.extra_count { info!("copy_to_slice, error slice too big {} > {}", count + 1, self.buffer_count + self.extra_count); }
-        if count + 1 < self.extra_count { info!("copy_to_slice error, extra too big {} < {}", count + 1, self.extra_count); }
+        debug_assert!(count + 1 <= self.buffer_count + self.extra_count, "copy_to_slice, error slice too big {} > {}", count + 1, self.buffer_count + self.extra_count);
+        debug_assert!(count + 1 >= self.extra_count, "copy_to_slice error, extra too big {} < {}", count + 1, self.extra_count);
         if self.extra_count > 1 {
             // first extra_buffer
             let next_count = self.extra_count-1;
-            target[..next_count].copy_from_slice(&self.buffer_extra[1..]);
+            target[..next_count].copy_from_slice(&self.buffer_extra[1..self.extra_count]);
             // then first half of circular buffer
             let count = count - next_count;
             if count > 0 {
@@ -385,7 +230,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             }
         } else {
             // first half of circular buffer
-            let buffer_end = min(self.data_pos + count, self.buffer.len());
+            let buffer_end = min(self.data_pos + 1 + count, self.buffer.len());
             let next_count = buffer_end - self.data_pos - 1;
             target[..next_count].copy_from_slice(&self.buffer[self.data_pos+1..buffer_end]);
             // finally second half if needed
@@ -397,12 +242,14 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
         }
     }
 
+    //#[tracing::instrument(skip_all)]
     fn enumerate(&self, count: usize) -> impl Iterator<Item = (usize, u8)> {
-        let end = min(self.data_pos + count, self.buffer.len());
+        let main_count = count + 1 - self.extra_count;
+        let end = min(self.data_pos + main_count, self.buffer.len());
         self.buffer_extra[..self.extra_count].iter()
             .chain(self.buffer[self.data_pos..end].iter())
             .chain(if end == self.buffer.len() {
-                self.buffer[0..count-(self.buffer.len()-self.data_pos)].iter()
+                self.buffer[0..main_count-(self.buffer.len()-self.data_pos)].iter()
             } else {
                 [].iter()
             })
@@ -411,8 +258,11 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
             .enumerate()
     }
 
+    //#[tracing::instrument(skip_all)]
     pub fn decode_next_scanline(&mut self, last_scanline: &mut [u8], bytes_per_pixel: usize) -> Result<(), DecodeError> {
-        self.get_enough_data(last_scanline.len()+1)?;
+        self.get_enough_data(last_scanline.len())?;
+        let mut test_scan = vec![0_u8; 5120];
+        self.copy_to_slice(&mut test_scan);
         let filter_type = self.filter_type()?;
 
         // decode scanline directly into last scanline
@@ -464,7 +314,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
                         } else if pb <= pc {
                             last_scanline[i]
                         } else {
-                            left_pixel[byte]
+                            top_left_pixel[byte]
                         };
                         top_left_pixel[byte] = last_scanline[i];
                         last_scanline[i] = value.wrapping_add(predictor);
@@ -473,8 +323,107 @@ impl<'src, 'buf> ChunkDecompressor<'src, 'buf> {
                     });
             }
         }
-
+        // accounting
+        self.remove_data(last_scanline.len() + 1);
         Ok(())
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use png_decoder::*;
+    use crate::ParsedPng;
+    use super::*;
+
+    fn new_decompressor() -> ChunkDecompressor<'static, 'static> {
+        todo!()
+        //ChunkDecompressor::new();
+    }
+
+    #[test]
+    fn list_chunks() {
+        let bytes = fs::read("sekiro.png").unwrap();
+        let png = ParsedPng::from_bytes(&bytes, true).unwrap();
+        let mut buffer = vec![0_u8; 1024 << 5];
+        let mut extra = vec![0_u8; 5120];
+        let mut decompressor = ChunkDecompressor::new(png.data_chunks, &mut buffer, &mut extra, true);
+
+        for _ in 0..35 {
+            decompressor.current_chunk = None;
+            decompressor.check_chunk_data();
+            assert!(decompressor.current_chunk.is_some(), "Missing chunk");
+            assert!(!decompressor.chunk_end, "Decompression ended early");
+            assert_eq!(decompressor.current_chunk.unwrap().len(), 32_768, "Incorrect chunk size");
+        }
+        decompressor.current_chunk = None;
+        decompressor.check_chunk_data();
+        assert!(decompressor.current_chunk.is_some(), "Missing chunk");
+        assert!(!decompressor.chunk_end, "Decompression ended early");
+        assert_eq!(decompressor.current_chunk.unwrap().len(), 7_663, "Incorrect chunk size");
+        decompressor.current_chunk = None;
+        decompressor.check_chunk_data();
+        assert!(decompressor.chunk_end, "Decompression ended late");
+    }
+
+    #[test]
+    fn read_chunks() {
+        let bytes = fs::read("sekiro.png").unwrap();
+        let png = ParsedPng::from_bytes(&bytes, true).unwrap();
+
+        let mut undecoded = pre_decode(&bytes).unwrap();
+
+        let mut buffer = vec![0_u8; 1024 << 5];
+        let mut extra = vec![0_u8; 5120];
+        let mut decompressor = ChunkDecompressor::new(png.data_chunks, &mut buffer, &mut extra, true);
+        let mut scanline = vec![0_u8; 5120];
+
+        for i in 0..720 {
+            let r = decompressor.get_enough_data(5121);
+            assert!(r.is_ok(), "Get data Error");
+            decompressor.copy_to_slice(&mut scanline);
+            assert_eq!(decompressor.enumerate(5120).count(), 5120, "Enumerate can't count");
+            let enumeration: Vec<u8> = decompressor.enumerate(5120).map(|(_,x)| x).collect();
+            assert_eq!(enumeration, scanline, "Enumerate misaligned with copy to slice");
+            assert_eq!(scanline, &undecoded.scanline_data[5121*i+1..5121*(i+1)], "Incorrect data at {}", i);
+            decompressor.remove_data(5121);
+        }
+        assert_eq!(decompressor.buffer_count, 0, "Main buffer left");
+        assert!(decompressor.chunk_end, "Decompression left some data");
+        assert_eq!(decompressor.extra_count, 0, "Extra buffer left");
+    }
+
+    #[test]
+    fn decode() {
+        let bytes = fs::read("sekiro.png").unwrap();
+        let png = ParsedPng::from_bytes(&bytes, true).unwrap();
+
+        let mut undecoded = pre_decode(&bytes).unwrap();
+        let mut image = vec![0_u8; 1280*720*4];
+        undecoded.process_scanlines(
+            |scanline_iter,xy_calculator,y| {
+                for (idx, (r, g, b, a)) in scanline_iter.enumerate() {
+                    let (x, y) = xy_calculator.get_xy(idx, y);
+                    let idx = (x + y * 1280)*4;
+                    image[idx] = r;
+                    image[idx+1] = g;
+                    image[idx+2] = b;
+                    image[idx+3] = a;
+                }
+            }).unwrap();
+
+        let mut buffer = vec![0_u8; 1024 << 5];
+        let mut extra = vec![0_u8; 5120];
+        let mut decompressor = ChunkDecompressor::new(png.data_chunks, &mut buffer, &mut extra, true);
+        let mut scanline = vec![0_u8; 5120];
+        for i in 0..720 {
+            let r = decompressor.decode_next_scanline(&mut scanline, 4);
+            assert!(r.is_ok(), "Get data Error");
+            assert_eq!(scanline, &image[i*5120..i*5120 + 5120], "Incorrect image at {}", i);
+        }
+        assert_eq!(decompressor.buffer_count, 0, "Main buffer left");
+        assert!(decompressor.chunk_end, "Decompression left some data");
+        assert_eq!(decompressor.extra_count, 0, "Extra buffer left");
+    }
+}

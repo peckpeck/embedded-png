@@ -2,6 +2,7 @@
 
 use num_enum::TryFromPrimitive;
 use crate::error::DecodeError;
+use crate::png::Chunk;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
@@ -55,20 +56,31 @@ pub enum InterlaceMethod {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum PixelType {
+pub enum PixelType<'a> {
     Grayscale1,
+    Grayscale1Transparent(u8),
     Grayscale2,
+    Grayscale2Transparent(u8),
     Grayscale4,
+    Grayscale4Transparent(u8),
     Grayscale8,
+    Grayscale8Transparent(u8),
     Grayscale16,
+    Grayscale16Transparent(u16),
 
     Rgb8,
+    Rgb8Transparent(u8,u8,u8),
     Rgb16,
+    Rgb16Transparent(u16,u16,u16),
 
     Palette1,
+    Palette1Transparent(&'a [u8]),
     Palette2,
+    Palette2Transparent(&'a [u8]),
     Palette4,
+    Palette4Transparent(&'a [u8]),
     Palette8,
+    Palette8Transparent(&'a [u8]),
 
     GrayscaleAlpha8,
     GrayscaleAlpha16,
@@ -77,24 +89,37 @@ pub enum PixelType {
     RgbAlpha16,
 }
 
-impl PixelType {
-    pub fn new(color_type: ColorType, bit_depth: u8) -> Result<Self, DecodeError> {
-        let result = match (color_type, bit_depth) {
-            (ColorType::Grayscale,1) => PixelType::Grayscale1,
-            (ColorType::Grayscale,2) => PixelType::Grayscale2,
-            (ColorType::Grayscale,4) => PixelType::Grayscale4,
-            (ColorType::Grayscale,8) => PixelType::Grayscale8,
-            (ColorType::Grayscale,16) => PixelType::Grayscale16,
-            (ColorType::Rgb,8) => PixelType::Rgb8,
-            (ColorType::Rgb,16) => PixelType::Rgb16,
-            (ColorType::Palette,1) => PixelType::Palette1,
-            (ColorType::Palette,2) => PixelType::Palette2,
-            (ColorType::Palette,4) => PixelType::Palette4,
-            (ColorType::Palette,8) => PixelType::Palette8,
-            (ColorType::GrayscaleAlpha,8) => PixelType::GrayscaleAlpha8,
-            (ColorType::GrayscaleAlpha,16) => PixelType::GrayscaleAlpha16,
-            (ColorType::RgbAlpha,8) => PixelType::RgbAlpha8,
-            (ColorType::RgbAlpha,18) => PixelType::RgbAlpha16,
+impl<'a> PixelType<'a> {
+    pub fn new(color_type: ColorType, bit_depth: u8, transparency_chunk: Option<&'a [u8]>) -> Result<Self, DecodeError> {
+        let result = match (color_type, bit_depth, transparency_chunk) {
+            (ColorType::Grayscale,1, None) => PixelType::Grayscale1,
+            (ColorType::Grayscale,1, Some(data)) => PixelType::Grayscale1Transparent(data[1] & 0b1),
+            (ColorType::Grayscale,2, None) => PixelType::Grayscale2,
+            (ColorType::Grayscale,2, Some(data)) => PixelType::Grayscale2Transparent(data[1] & 0b11),
+            (ColorType::Grayscale,4, None) => PixelType::Grayscale4,
+            (ColorType::Grayscale,4, Some(data)) => PixelType::Grayscale4Transparent(data[1] & 0b1111),
+            (ColorType::Grayscale,8, None) => PixelType::Grayscale8,
+            (ColorType::Grayscale,8, Some(data)) => PixelType::Grayscale8Transparent(data[1]),
+            (ColorType::Grayscale,16, None) => PixelType::Grayscale16,
+            (ColorType::Grayscale,16, Some(data)) => PixelType::Grayscale16Transparent((data[0] as u16) <<8 | data[1] as u16),
+            (ColorType::Rgb,8, None) => PixelType::Rgb8,
+            (ColorType::Rgb,8, Some(data)) => PixelType::Rgb8Transparent(data[1], data[3], data[5]),
+            (ColorType::Rgb,16, None) => PixelType::Rgb16,
+            (ColorType::Rgb,16, Some(data)) => PixelType::Rgb16Transparent((data[0] as u16) <<8 | data[1] as u16,
+                                                                           (data[2] as u16) <<8 | data[3] as u16,
+                                                                           (data[4] as u16) <<8 | data[5] as u16),
+            (ColorType::Palette,1, None) => PixelType::Palette1,
+            (ColorType::Palette,1, Some(data)) => PixelType::Palette1Transparent(data),
+            (ColorType::Palette,2, None) => PixelType::Palette2,
+            (ColorType::Palette,2, Some(data)) => PixelType::Palette2Transparent(data),
+            (ColorType::Palette,4, None) => PixelType::Palette4,
+            (ColorType::Palette,4, Some(data)) => PixelType::Palette4Transparent(data),
+            (ColorType::Palette,8, None) => PixelType::Palette8,
+            (ColorType::Palette,8, Some(data)) => PixelType::Palette8Transparent(data),
+            (ColorType::GrayscaleAlpha,8, None) => PixelType::GrayscaleAlpha8,
+            (ColorType::GrayscaleAlpha,16, None) => PixelType::GrayscaleAlpha16,
+            (ColorType::RgbAlpha,8, None) => PixelType::RgbAlpha8,
+            (ColorType::RgbAlpha,18, None) => PixelType::RgbAlpha16,
             _ => return Err(DecodeError::InvalidColorTypeBitDepthCombination),
         };
         Ok(result)
@@ -138,6 +163,7 @@ pub enum TransparencyChunk<'a> {
     Rgb(u8, u8, u8),
 }
 
+/*
 impl<'a> TransparencyChunk<'a> {
     pub fn from_data(data: &'a [u8], pixel_type: PixelType) -> Option<Self> {
         log::info!("transparency {:?}", pixel_type);
@@ -159,4 +185,4 @@ impl<'a> TransparencyChunk<'a> {
             PixelType::RgbAlpha16 => None,
         }
     }
-}
+}*/
