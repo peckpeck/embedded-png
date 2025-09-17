@@ -5,6 +5,7 @@ use embedded_graphics_core::pixelcolor::{Argb8888, PixelColor, Rgb888};
 use embedded_graphics_core::prelude::{Point, Size};
 use embedded_graphics_core::primitives::Rectangle;
 use log::info;
+use crate::colors::PixelsIterator;
 use crate::error::DecodeError;
 use crate::inflate::ChunkDecompressor;
 use crate::read_u32;
@@ -62,7 +63,7 @@ impl<'src> ParsedPng<'src> {
 
             start = chunk.end;
         }
-        let pixel_type = PixelType::new(header.color_type, header.bit_depth, transparency)?;
+        let pixel_type = PixelType::new(header.color_type, header.bit_depth, palette, transparency)?;
 
         if let (Some(data_start), Some(data_end)) = (data_start, data_end) {
             Ok(ParsedPng {
@@ -83,7 +84,7 @@ impl<'src> ParsedPng<'src> {
     pub fn linear_draw<T: DrawTarget<Color=Argb8888>>(&self,
                                     buffer: &mut [u8], buffer_extra: &mut [u8],
                                   scanline_buf: &mut [u8], target: &mut T) -> Result<(), DecodeError> {
-        let mut  decompressor = ChunkDecompressor::new(
+        let mut  decompressor = ChunkDecompressor::new_ref(
             self.data_chunks, buffer, buffer_extra, self.crc_checked
         );
         // assume InterlaceMethod is None
@@ -95,9 +96,10 @@ impl<'src> ParsedPng<'src> {
                 Ok(_) => {}
                 Err(e) => {info!("scanline error {:?}",e); return Err(e) },
             }
+            let it = PixelsIterator::new(self, scanline_buf);
             //let it = RgbAlpha8Iterator{ scanline: scanline_buf, pos: 0 };
             let line = Rectangle::new(Point::new(0,y as i32), Size::new(1280,1));
-            // TODO target.fill_contiguous(&line, it).map_err(|_| DecodeError::MissingBytes);
+            target.fill_contiguous(&line, it).map_err(|_| DecodeError::MissingBytes)?;
  //           for x in 0..self.header.width {
  //               let (r,g,b,a) =  get_color(self, scanline_buf, x);
  //               let rgb = Rgb888::new(r,g,b);
@@ -196,6 +198,7 @@ impl PngHeader {
         }
     }
 
+    // TODO this is probably wrong with greyscale
     fn bytes_per_pixel(&self) -> usize {
         ((self.bit_depth as usize * self.color_type.sample_multiplier()) + 7) / 8
     }
@@ -261,15 +264,6 @@ impl<'src> Chunk<'src> {
         Ok(Chunk { chunk_type, data: &chunk_bytes[8..crc_offset], start, end, _crc: crc })
     }
 }
-
-
-
-// TODO remove
-#[inline(always)]
-fn u16_to_u8(val: u16) -> u8 {
-    (val >> 8) as u8
-}
-
 
 #[cfg(test)]
 mod tests {
