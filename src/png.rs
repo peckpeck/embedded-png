@@ -45,7 +45,6 @@ impl<'src> ParsedPng<'src> {
 
         let mut start = header_chunk.end;
 
-        // TODO we skip CRC for now
         while !bytes.is_empty() {
             let chunk = Chunk::from_bytes(bytes, start, check_crc)?;
 
@@ -96,10 +95,10 @@ impl<'src> ParsedPng<'src> {
                 Ok(_) => {}
                 Err(e) => {info!("scanline error {:?}",e); return Err(e) },
             }
-            let it = PixelsIterator::new(self, scanline_buf);
+            //let it = PixelsIterator::new(self, scanline_buf);
             //let it = RgbAlpha8Iterator{ scanline: scanline_buf, pos: 0 };
-            let line = Rectangle::new(Point::new(0,y as i32), Size::new(1280,1));
-            target.fill_contiguous(&line, it).map_err(|_| DecodeError::MissingBytes)?;
+            //let line = Rectangle::new(Point::new(0,y as i32), Size::new(1280,1));
+            //target.fill_contiguous(&line, it).map_err(|_| DecodeError::MissingBytes)?;
  //           for x in 0..self.header.width {
  //               let (r,g,b,a) =  get_color(self, scanline_buf, x);
  //               let rgb = Rgb888::new(r,g,b);

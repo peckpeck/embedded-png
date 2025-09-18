@@ -67,11 +67,6 @@ pub enum PixelType<'a> {
     Grayscale16,
     Grayscale16Transparent(u16),
 
-    Rgb8,
-    Rgb8Transparent(u8,u8,u8),
-    Rgb16,
-    Rgb16Transparent(u16,u16,u16),
-
     Palette1(&'a [u8]),
     Palette1Transparent(&'a [u8],&'a [u8]),
     Palette2(&'a [u8]),
@@ -83,6 +78,12 @@ pub enum PixelType<'a> {
 
     GrayscaleAlpha8,
     GrayscaleAlpha16,
+
+    Rgb8,
+    Rgb8Transparent([u8; 3]),
+    Rgb16,
+    // keep u8 as embedded graphics doesn't support u16
+    Rgb16Transparent([u8; 3]),
 
     RgbAlpha8,
     RgbAlpha16,
@@ -101,12 +102,6 @@ impl<'a> PixelType<'a> {
             (ColorType::Grayscale,8, None, Some(data)) => PixelType::Grayscale8Transparent(data[1]),
             (ColorType::Grayscale,16, None, None) => PixelType::Grayscale16,
             (ColorType::Grayscale,16, None, Some(data)) => PixelType::Grayscale16Transparent((data[0] as u16) <<8 | data[1] as u16),
-            (ColorType::Rgb,8, None, None) => PixelType::Rgb8,
-            (ColorType::Rgb,8, None, Some(data)) => PixelType::Rgb8Transparent(data[1], data[3], data[5]),
-            (ColorType::Rgb,16, None, None) => PixelType::Rgb16,
-            (ColorType::Rgb,16, None, Some(data)) => PixelType::Rgb16Transparent((data[0] as u16) <<8 | data[1] as u16,
-                                                                           (data[2] as u16) <<8 | data[3] as u16,
-                                                                           (data[4] as u16) <<8 | data[5] as u16),
             (ColorType::Palette,1, Some(palette), None) => PixelType::Palette1(palette),
             (ColorType::Palette,1, Some(palette), Some(transparency)) => PixelType::Palette1Transparent(palette, transparency),
             (ColorType::Palette,2, Some(palette), None) => PixelType::Palette2(palette),
@@ -117,6 +112,10 @@ impl<'a> PixelType<'a> {
             (ColorType::Palette,8, Some(palette), Some(transparency)) => PixelType::Palette8Transparent(palette, transparency),
             (ColorType::GrayscaleAlpha,8, None, None) => PixelType::GrayscaleAlpha8,
             (ColorType::GrayscaleAlpha,16, None, None) => PixelType::GrayscaleAlpha16,
+            (ColorType::Rgb,8, None, None) => PixelType::Rgb8,
+            (ColorType::Rgb,8, None, Some(data)) => PixelType::Rgb8Transparent([data[1], data[3], data[5]]),
+            (ColorType::Rgb,16, None, None) => PixelType::Rgb16,
+            (ColorType::Rgb,16, None, Some(data)) => PixelType::Rgb16Transparent([data[0], data[2], data[4]]),
             (ColorType::RgbAlpha,8, None, None) => PixelType::RgbAlpha8,
             (ColorType::RgbAlpha,18, None, None) => PixelType::RgbAlpha16,
             _ => return Err(DecodeError::InvalidColorTypeBitDepthCombination),
