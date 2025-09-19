@@ -19,6 +19,7 @@ use embedded_graphics_core::geometry::Point;
 use png_decoder::{pre_decode, PngHeader, DecodeError, UndecodedPng};
 pub use crate::png::ParsedPng;
 pub use crate::inflate::ChunkDecompressor;
+pub use crate::colors::{AlphaColor, IgnoreAlpha, DontDraw, WithBackground};
 
 pub type Png<C> = BufferedPng<C>;
 
@@ -81,7 +82,7 @@ impl<C: PixelColor> ImageDrawable for BufferedPng<C> {
 
 pub fn dump_png(bytes: &[u8]) {
     log::info!("dumping");
-    let data = match ParsedPng::from_bytes(bytes, true) {
+    let data = match ParsedPng::from_bytes(bytes, true, AlphaColor) {
         Ok(x) => {log::info!("okok"); log::info!("Ok {:?}", x.header)},
         Err(e) => {log::info!("Err {:?}",e)}
     };

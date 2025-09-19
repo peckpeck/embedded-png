@@ -1,6 +1,7 @@
 use core::marker::PhantomData;
 use embedded_graphics_core::pixelcolor::{Argb8888, BinaryColor, Gray2, Gray4, Gray8, Rgb888};
 use embedded_graphics_core::prelude::PixelColor;
+use log::info;
 use crate::ParsedPng;
 use crate::types::PixelType;
 
@@ -16,19 +17,27 @@ enum AlphaHandling {
     Enable,
 }*/
 
-trait AlphaHandler<C> { }
+pub trait AlphaHandler<C> : Clone{ }
+pub trait ReturnC {}
 
-struct IgnoreAlpha;
+#[derive(Clone)]
+pub struct IgnoreAlpha;
 impl<C> AlphaHandler<C> for IgnoreAlpha {}
+impl ReturnC for IgnoreAlpha {}
 
-struct KeepAlpha;
-impl<C> AlphaHandler<C> for KeepAlpha {}
+#[derive(Clone)]
+pub struct AlphaColor;
+impl<C> AlphaHandler<C> for AlphaColor {}
+impl ReturnC for AlphaColor {}
 
-struct WithBackground<C>(C);
+#[derive(Clone)]
+pub struct WithBackground<C>(C);
 impl<C: PixelColor> AlphaHandler<C> for WithBackground<C> {}
+impl<C> ReturnC for WithBackground<C> {}
 
-struct ReturnAlpha;
-impl<C> AlphaHandler<C> for ReturnAlpha {}
+#[derive(Clone)]
+pub struct DontDraw;
+impl<C> AlphaHandler<C> for DontDraw {}
 
 pub struct PixelsIterator<'a, Color, Handler> {
     pixel_type: PixelType<'a>,
@@ -70,15 +79,14 @@ fn tntr(reference: &[u8], value: &[u8]) -> u8 {
 }
 
 impl <'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler> {
-    pub fn new(png: &ParsedPng<'a>, scanline: &'a [u8], handler: Handler) -> Self {
-        let max_pos = png.header.color_type.sample_multiplier() * png.header.width;
+    pub fn new(png: &ParsedPng<'a, Handler>, scanline: &'a [u8]) -> Self {
         PixelsIterator {
             pixel_type: png.pixel_type,
             palette: png.palette,
             scanline,
             pos: 0,
-            max_pos,
-            handler,
+            max_pos: scanline.len(),
+            handler: png.alpha_handler.clone(),
             _phantom: PhantomData,
         }
     }
@@ -175,6 +183,7 @@ impl <'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler
         }
     }
 
+    // TODO, is this better than next_keep_alpha.1
     fn next_skip_alpha(&mut self) -> Color
     where BinaryColor: Into<Color>,
           Gray2: Into<Color>,
@@ -433,7 +442,7 @@ where BinaryColor: Into<C>,
     }
 }
 
-impl <'a, C> Iterator for PixelsIterator<'a, C, KeepAlpha>
+impl <'a, C> Iterator for PixelsIterator<'a, C, AlphaColor>
 where BinaryColor: Into<C>,
       Gray2: Into<C>,
       Gray4: Into<C>,
@@ -470,7 +479,7 @@ where BinaryColor: Into<C>,
     }
 }
 
-impl <'a, C> Iterator for PixelsIterator<'a, C, ReturnAlpha>
+impl <'a, C> Iterator for PixelsIterator<'a, C, DontDraw>
 where BinaryColor: Into<C>,
       Gray2: Into<C>,
       Gray4: Into<C>,

@@ -3,7 +3,9 @@ use core::fmt::{Display, Formatter};
 use miniz_oxide::inflate::TINFLStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Errors that can be returned wby embedded-png operations
 pub enum DecodeError {
+    // TODO document
     InvalidMagicBytes,
     MissingBytes,
     HeaderChunkNotFirst,
@@ -15,14 +17,12 @@ pub enum DecodeError {
     IncorrectChunkCrc,
     InvalidBitDepth,
     InvalidColorType,
-    InvalidColorTypeBitDepthCombination,
+    InvalidPixelTypeCombination,
     InvalidCompressionMethod,
     InvalidFilterMethod,
     InvalidFilterType,
     InvalidInterlaceMethod,
 
-    // The width/height specified in the image contains too many
-    // bytes to address with a usize on this platform.
     IntegerOverflow,
 }
 
@@ -39,12 +39,12 @@ impl Display for DecodeError {
             DecodeError::IncorrectChunkCrc => "incorrect chunk crc",
             DecodeError::InvalidBitDepth => "invalid bit depth",
             DecodeError::InvalidColorType => "invalid color type",
-            DecodeError::InvalidColorTypeBitDepthCombination => "invalid color type bitdepth combination",
+            DecodeError::InvalidPixelTypeCombination => "invalid color type * bit depth * transparency combination",
             DecodeError::InvalidCompressionMethod => "invalid compression method",
             DecodeError::InvalidFilterMethod => "invalid filter method",
             DecodeError::InvalidFilterType => "invalid filter type",
             DecodeError::InvalidInterlaceMethod => "invalid interlace method",
-            DecodeError::IntegerOverflow => "integer overflow",
+            DecodeError::IntegerOverflow => "integer overflow (usize too small)",
         };
         write!(f, "embedded-png Error: {}", s)
     }

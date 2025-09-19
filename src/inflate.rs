@@ -318,9 +318,7 @@ where T: AsRef<[u8]> + AsMut<[u8]>
     }
 
     pub fn decode_next_scanline(&mut self, last_scanline: &mut [u8], bytes_per_pixel: usize) -> Result<(), DecodeError> {
-        self.get_enough_data(last_scanline.len())?;
-        let mut test_scan = vec![0_u8; 5120];
-        self.copy_to_slice(&mut test_scan);
+        self.get_enough_data(last_scanline.len()+1)?;
         let filter_type = self.filter_type()?;
 
         // decode scanline directly into last scanline
@@ -395,13 +393,14 @@ where T: AsRef<[u8]> + AsMut<[u8]>
 mod tests {
     use std::fs;
     use png_decoder::*;
+    use crate::colors::AlphaColor;
     use crate::ParsedPng;
     use super::*;
 
     #[test]
     fn list_chunks() {
         let bytes = fs::read("sekiro.png").unwrap();
-        let png = ParsedPng::from_bytes(&bytes, true).unwrap();
+        let png = ParsedPng::from_bytes(&bytes, true, AlphaColor).unwrap();
 
         let mut decompressor = ChunkDecompressor::new_vec(png.data_chunks, true);
 
@@ -425,7 +424,7 @@ mod tests {
     #[test]
     fn read_chunks() {
         let bytes = fs::read("sekiro.png").unwrap();
-        let png = ParsedPng::from_bytes(&bytes, true).unwrap();
+        let png = ParsedPng::from_bytes(&bytes, true, AlphaColor).unwrap();
 
         let mut undecoded = pre_decode(&bytes).unwrap();
 
@@ -450,7 +449,7 @@ mod tests {
     #[test]
     fn decode() {
         let bytes = fs::read("sekiro.png").unwrap();
-        let png = ParsedPng::from_bytes(&bytes, true).unwrap();
+        let png = ParsedPng::from_bytes(&bytes, true, AlphaColor).unwrap();
 
         let mut undecoded = pre_decode(&bytes).unwrap();
         let mut image = vec![0_u8; 1280*720*4];
@@ -477,4 +476,6 @@ mod tests {
         assert!(decompressor.chunk_end, "Decompression left some data");
         assert_eq!(decompressor.extra_count, 0, "Extra buffer left");
     }
+    
+    // TODO test buffer limits (max size +-1)
 }
