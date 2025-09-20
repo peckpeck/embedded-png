@@ -7,15 +7,15 @@ use crate::error::DecodeError;
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
 pub enum ColorType {
-    // Each pixel is a grayscale sample
+    /// Each pixel is a grayscale sample
     Grayscale = 0,
-    // Each pixel is an R,G,B triple.
+    /// Each pixel is an R,G,B triple.
     Rgb = 2,
-    // Each pixel is a palette index; a PLTE chunk must appear.
+    /// Each pixel is a palette index; a PLTE chunk must appear.
     Palette = 3,
-    // Each pixel is a grayscale sample, followed by an alpha sample.
+    /// Each pixel is a grayscale sample, followed by an alpha sample.
     GrayscaleAlpha = 4,
-    // Each pixel is an R,G,B triple, followed by an alpha sample.
+    /// Each pixel is an R,G,B triple, followed by an alpha sample.
     RgbAlpha = 6,
 }
 

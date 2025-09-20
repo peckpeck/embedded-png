@@ -23,6 +23,7 @@ pub enum DecodeError {
     InvalidFilterType,
     InvalidInterlaceMethod,
 
+    /// indexing bytes in the image with not work because usize is too small (unlikely)
     IntegerOverflow,
 }
 
