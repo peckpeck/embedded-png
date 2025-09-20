@@ -8,20 +8,13 @@ mod types;
 mod inflate;
 mod colors;
 
-use embedded_graphics_core::{pixelcolor::PixelColor,
-                             pixelcolor::Rgb888,
-                             draw_target::DrawTarget,
-                             geometry::OriginDimensions,
-                             image::ImageDrawable,
-                             prelude::{Dimensions, Size},
-                             primitives::Rectangle};
-use embedded_graphics_core::geometry::Point;
-use png_decoder::{pre_decode, PngHeader, DecodeError, UndecodedPng};
 pub use crate::png::ParsedPng;
 pub use crate::inflate::ChunkDecompressor;
 pub use crate::colors::{AlphaColor, IgnoreAlpha, DontDraw, WithBackground};
 
+/*
 pub type Png<C> = BufferedPng<C>;
+
 
 pub struct BufferedPng<C> {
     pub header: PngHeader,
@@ -78,44 +71,6 @@ impl<C: PixelColor> ImageDrawable for BufferedPng<C> {
         }
         Ok(())
     }
-}
-
-pub fn dump_png(bytes: &[u8]) {
-    log::info!("dumping");
-    let data = match ParsedPng::from_bytes(bytes, true, AlphaColor) {
-        Ok(x) => {log::info!("okok"); log::info!("Ok {:?}", x.header)},
-        Err(e) => {log::info!("Err {:?}",e)}
-    };
-}
-/*
-pub struct EncodedPng<'a> {
-    pub encoded: UndecodedPng<'a>
-}
-
-impl<'a> EncodedPng<'a> {
-    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, DecodeError> {
-        let encoded = pre_decode(bytes)?;
-        Ok(EncodedPng { encoded })
-    }
-}
-
-impl<'a> OriginDimensions for EncodedPng<'a> {
-    fn size(&self) -> Size {
-        Size::new(self.encoded.header.width, self.encoded.header.height)
-    }
-}
-
-impl<C: PixelColor> ImageDrawable for EncodedPng<'a> {
-    type Color = C;
-
-    fn draw<D>(&self, target: &mut D) -> Result<(), D::Error> where D: DrawTarget<Color=Self::Color> {
-        let area = self.bounding_box();
-        target.draw_iter()
-        target.fill_contiguous(&area, self.data.iter().copied())
-    }
-
-    fn draw_sub_image<D>(&self, target: &mut D, area: &Rectangle) -> Result<(), D::Error> where D: DrawTarget<Color=Self::Color>
-    {}
 }
 */
 

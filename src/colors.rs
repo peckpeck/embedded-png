@@ -1,7 +1,6 @@
 use core::marker::PhantomData;
-use embedded_graphics_core::pixelcolor::{Argb8888, BinaryColor, Gray2, Gray4, Gray8, Rgb888};
+use embedded_graphics_core::pixelcolor::{BinaryColor, Gray2, Gray4, Gray8, Rgb888};
 use embedded_graphics_core::prelude::PixelColor;
-use log::info;
 use crate::ParsedPng;
 use crate::types::PixelType;
 
@@ -25,6 +24,7 @@ pub struct IgnoreAlpha;
 impl<C> AlphaHandler<C> for IgnoreAlpha {}
 impl ReturnC for IgnoreAlpha {}
 
+/// Not available yet in embedded-graphics
 #[derive(Clone)]
 pub struct AlphaColor;
 impl<C> AlphaHandler<C> for AlphaColor {}
@@ -344,7 +344,7 @@ impl <'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler
           Gray4: Into<Color>,
           Gray8: Into<Color>,
           Rgb888: Into<Color>,
-          Argb8888: Into<Color>
+          //Argb8888: Into<Color>
     {
         match self.pixel_type {
             PixelType::Grayscale1Transparent(t) => {
@@ -385,11 +385,13 @@ impl <'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler
             },
             PixelType::Rgb8Transparent(t) => {
                 let bytes = self.bytes::<3>();
-                Argb8888::new(bytes[0], bytes[1], bytes[2], tntr(&t, &bytes)).into()
+                //Argb8888::new(bytes[0], bytes[1], bytes[2], tntr(&t, &bytes)).into()
+                todo!()
             },
             PixelType::Rgb16Transparent(t) => {
                 let bytes = self.words::<3>();
-                Argb8888::new(bytes[0], bytes[1], bytes[2], tntr(&t, &bytes)).into()
+                //Argb8888::new(bytes[0], bytes[1], bytes[2], tntr(&t, &bytes)).into()
+                todo!()
             },
             PixelType::GrayscaleAlpha8 => {
                 let bytes = self.bytes::<2>();
@@ -401,11 +403,13 @@ impl <'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler
             }
             PixelType::RgbAlpha8 => {
                 let bytes = self.bytes::<4>();
-                Argb8888::new(bytes[0], bytes[1], bytes[2], bytes[3]).into()
+                //Argb8888::new(bytes[0], bytes[1], bytes[2], bytes[3]).into()
+                todo!()
             },
             PixelType::RgbAlpha16 => {
                 let bytes = self.words::<4>();
-                Argb8888::new(bytes[0], bytes[1], bytes[2], bytes[3]).into()
+                //Argb8888::new(bytes[0], bytes[1], bytes[2], bytes[3]).into()
+                todo!()
             },
             _ => self.next_opaque()
         }
@@ -448,7 +452,7 @@ where BinaryColor: Into<C>,
       Gray4: Into<C>,
       Gray8: Into<C>,
       Rgb888: Into<C>,
-      Argb8888: Into<C>,
+//      Argb8888: Into<C>,
 {
     type Item = C;
 

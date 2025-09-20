@@ -2,14 +2,13 @@ use core::convert::{TryFrom, TryInto};
 use crc32fast::Hasher;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::Pixel;
-use embedded_graphics_core::pixelcolor::{Argb8888, PixelColor, Rgb888};
+use embedded_graphics_core::pixelcolor::PixelColor;
 use embedded_graphics_core::prelude::{Point, Size};
 use embedded_graphics_core::primitives::Rectangle;
-use log::info;
-use crate::colors::{AlphaHandler, AlphaColor, PixelsIterator, DontDraw, ReturnC};
+use crate::colors::{AlphaHandler, PixelsIterator, DontDraw, ReturnC};
 use crate::error::DecodeError;
 use crate::inflate::ChunkDecompressor;
-use crate::{read_u32, IgnoreAlpha};
+use crate::read_u32;
 use crate::types::*;
 
 const PNG_MAGIC_BYTES: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
@@ -123,10 +122,8 @@ impl<'src, H> ParsedPng<'src, H> {
                     if pass_width == 0 || pass_height == 0 {
                         continue;
                     }
-                    info!("pass {}: {} x {}", pass, pass_width, pass_height);
 
                     let bytes_per_scanline = pass_width * bytes_per_pixel;
-                    info!("scanline {}", bytes_per_scanline);
                     let last_scanline = &mut scanline_buf[..(bytes_per_scanline)];
 
                     for y in 0..pass_height {
@@ -432,6 +429,7 @@ impl<'src> Chunk<'src> {
 mod tests {
     use super::*;
     use std::fs;
+    use crate::AlphaColor;
 
     #[test]
     fn parse_png() {

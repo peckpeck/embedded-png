@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-png-decoder = { path = "../tmp/png-decoder" }
-embedded-graphics-core = { path = "../embedded-graphics/core" }
+#embedded-graphics-core = { path = "../embedded-graphics/core" }
+embedded-graphics-core = "^0.4"
 miniz_oxide = { version = "^0.8", default-features = false }
 crc32fast = { version = "^1.5", default-features = false }
-log = "^0.4"
 num_enum = { version = "^0.7", default-features = false }
-tracing = "0.1.41"
+
+[dev-dependencies]
+png-decoder = "^0.1"
