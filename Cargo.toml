@@ -2,6 +2,14 @@
 name = "embedded-png"
 version = "0.1.0"
 edition = "2024"
+authors = ["Benoit Peccatte <benoit.peccatte@ruder.io>"]
+description = "PNG rendering with embedded-graphics"
+keywords = ["png", "embedded", "no_std"]
+categories = ["embedded", "no-std"]
+readme = "./README.md"
+license = "MIT"
+repository = "https://github.com/peckpeck/embedded-png"
+documentation = "https://docs.rs/embedded-png"
 
 [dependencies]
 #embedded-graphics-core = { path = "../embedded-graphics/core" }
