@@ -11,11 +11,14 @@ license = "MIT"
 repository = "https://github.com/peckpeck/embedded-png"
 documentation = "https://docs.rs/embedded-png"
 
+[features]
+alloc = []
+
 [dependencies]
 #embedded-graphics-core = { path = "../embedded-graphics/core" }
 embedded-graphics-core = "^0.4"
-#miniz_oxide = { version = "^0.8", default-features = false }
-miniz_oxide = { git = "https://github.com/Frommi/miniz_oxide.git", rev = "bac1abee827765b7d639ba9c574c28e444d7d3df" }
+miniz_oxide = { version = "^0.9", default-features = false }
+#miniz_oxide = { git = "https://github.com/Frommi/miniz_oxide.git", rev = "bac1abee827765b7d639ba9c574c28e444d7d3df" }
 crc32fast = { version = "^1.5", default-features = false }
 num_enum = { version = "^0.7", default-features = false }
 

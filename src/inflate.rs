@@ -1,10 +1,15 @@
 use core::cmp::min;
-use miniz_oxide::inflate::core::{decompress, decompress_with_limit, DecompressorOxide};
+use miniz_oxide::inflate::core::{decompress_with_limit, DecompressorOxide};
 use miniz_oxide::inflate::core::inflate_flags::{TINFL_FLAG_COMPUTE_ADLER32, TINFL_FLAG_HAS_MORE_INPUT, TINFL_FLAG_PARSE_ZLIB_HEADER};
 use miniz_oxide::inflate::TINFLStatus;
 use crate::error::DecodeError;
 use crate::png::Chunk;
 use crate::types::{ChunkType, FilterType};
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(feature = "alloc")]
+use alloc::{vec,vec::Vec};
 
 /// The decompressor is implemented as a circular buffer
 pub struct ChunkDecompressor<'src, T> {
@@ -56,6 +61,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, &'buf mut [u8]> {
 }
 
 // TODO alloc only
+#[cfg(feature = "alloc")]
 impl<'src> ChunkDecompressor<'src, Vec<u8>> {
     // buffer size must be >= min(decompression_window(32k), total_output_size)
     // buffer extra size must be >= max scanline bytes
@@ -179,7 +185,6 @@ where T: AsRef<[u8]> + AsMut<[u8]>
                        available_bytes,
                        self.flags
             );
-        println!("decompressed {}", out_count);
 
         // account for byte read
         if let Some(chunk) = &mut self.current_chunk {
@@ -334,8 +339,9 @@ where T: AsRef<[u8]> + AsMut<[u8]>
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+    use std::prelude::v1::*;
     use std::fs;
-    use png_decoder::*;
     use crate::colors::AlphaColor;
     use crate::ParsedPng;
     use super::*;

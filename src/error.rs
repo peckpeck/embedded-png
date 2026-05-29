@@ -28,7 +28,7 @@ pub enum DecodeError {
 }
 
 impl Display for DecodeError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         let s = match self {
             DecodeError::InvalidMagicBytes => "invalid magic bytes",
             DecodeError::MissingBytes => "missing bytes",

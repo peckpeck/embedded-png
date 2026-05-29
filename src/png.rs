@@ -1,3 +1,4 @@
+#![no_std]
 use core::convert::{TryFrom, TryInto};
 use crc32fast::Hasher;
 use embedded_graphics_core::draw_target::DrawTarget;
@@ -427,6 +428,7 @@ impl<'src> Chunk<'src> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
     use std::fs;
     use crate::AlphaColor;

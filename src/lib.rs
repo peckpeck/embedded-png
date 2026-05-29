@@ -1,6 +1,7 @@
 //! DOC not suitable for 16bits usize
+#![no_std]
 
-extern crate core;
+//extern crate core;
 
 mod png;
 mod error;

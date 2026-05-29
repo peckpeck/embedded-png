@@ -1,4 +1,4 @@
-// Partly taken as is from png-decoder crate by Brian Schwind, licence MIT
+// Partly taken as is from png-decoder crate by Brian Schwind, license MIT
 
 use num_enum::TryFromPrimitive;
 use crate::error::DecodeError;
