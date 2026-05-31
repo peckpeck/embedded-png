@@ -3,15 +3,15 @@
 
 //extern crate core;
 
-mod png;
-mod error;
-mod types;
-mod inflate;
 mod colors;
+mod error;
+mod inflate;
+mod png;
+mod types;
 
-pub use crate::png::ParsedPng;
+pub use crate::colors::{AlphaColor, DontDraw, IgnoreAlpha, WithBackground};
 pub use crate::inflate::ChunkDecompressor;
-pub use crate::colors::{AlphaColor, IgnoreAlpha, DontDraw, WithBackground};
+pub use crate::png::ParsedPng;
 
 /*
 pub type Png<C> = BufferedPng<C>;
@@ -76,10 +76,13 @@ impl<C: PixelColor> ImageDrawable for BufferedPng<C> {
 */
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
+    u32::from_be_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
 }
-
-
 
 #[cfg(test)]
 mod tests {

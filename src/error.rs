@@ -40,7 +40,9 @@ impl Display for DecodeError {
             DecodeError::IncorrectChunkCrc => "incorrect chunk crc",
             DecodeError::InvalidBitDepth => "invalid bit depth",
             DecodeError::InvalidColorType => "invalid color type",
-            DecodeError::InvalidPixelTypeCombination => "invalid color type * bit depth * transparency combination",
+            DecodeError::InvalidPixelTypeCombination => {
+                "invalid color type * bit depth * transparency combination"
+            }
             DecodeError::InvalidCompressionMethod => "invalid compression method",
             DecodeError::InvalidFilterMethod => "invalid filter method",
             DecodeError::InvalidFilterType => "invalid filter type",

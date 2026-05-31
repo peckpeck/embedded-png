@@ -1,7 +1,7 @@
 // Partly taken as is from png-decoder crate by Brian Schwind, license MIT
 
-use num_enum::TryFromPrimitive;
 use crate::error::DecodeError;
+use num_enum::TryFromPrimitive;
 
 /// Image color type as defined in the PNG spec
 #[repr(u8)]
@@ -89,13 +89,13 @@ pub enum PixelType<'a> {
     Grayscale16Transparent(u16),
 
     Palette1(&'a [u8]),
-    Palette1Transparent(&'a [u8],&'a [u8]),
+    Palette1Transparent(&'a [u8], &'a [u8]),
     Palette2(&'a [u8]),
-    Palette2Transparent(&'a [u8],&'a [u8]),
+    Palette2Transparent(&'a [u8], &'a [u8]),
     Palette4(&'a [u8]),
-    Palette4Transparent(&'a [u8],&'a [u8]),
+    Palette4Transparent(&'a [u8], &'a [u8]),
     Palette8(&'a [u8]),
-    Palette8Transparent(&'a [u8],&'a [u8]),
+    Palette8Transparent(&'a [u8], &'a [u8]),
 
     GrayscaleAlpha8,
     GrayscaleAlpha16,
@@ -113,34 +113,61 @@ pub enum PixelType<'a> {
 impl<'a> PixelType<'a> {
     /// Create a new pixel type from underlying data
     /// Return an Error if provided parameters are not compatible
-    pub fn new(color_type: ColorType, bit_depth: u8, palette_chunk: Option<&'a [u8]>, transparency_chunk: Option<&'a [u8]>) -> Result<Self, DecodeError> {
+    pub fn new(
+        color_type: ColorType,
+        bit_depth: u8,
+        palette_chunk: Option<&'a [u8]>,
+        transparency_chunk: Option<&'a [u8]>,
+    ) -> Result<Self, DecodeError> {
         let result = match (color_type, bit_depth, palette_chunk, transparency_chunk) {
-            (ColorType::Grayscale,1, None, None) => PixelType::Grayscale1,
-            (ColorType::Grayscale,1, None, Some(data)) => PixelType::Grayscale1Transparent(data[1] & 0b1),
-            (ColorType::Grayscale,2, None, None) => PixelType::Grayscale2,
-            (ColorType::Grayscale,2, None, Some(data)) => PixelType::Grayscale2Transparent(data[1] & 0b11),
-            (ColorType::Grayscale,4, None, None) => PixelType::Grayscale4,
-            (ColorType::Grayscale,4, None, Some(data)) => PixelType::Grayscale4Transparent(data[1] & 0b1111),
-            (ColorType::Grayscale,8, None, None) => PixelType::Grayscale8,
-            (ColorType::Grayscale,8, None, Some(data)) => PixelType::Grayscale8Transparent(data[1]),
-            (ColorType::Grayscale,16, None, None) => PixelType::Grayscale16,
-            (ColorType::Grayscale,16, None, Some(data)) => PixelType::Grayscale16Transparent((data[0] as u16) <<8 | data[1] as u16),
-            (ColorType::Palette,1, Some(palette), None) => PixelType::Palette1(palette),
-            (ColorType::Palette,1, Some(palette), Some(transparency)) => PixelType::Palette1Transparent(palette, transparency),
-            (ColorType::Palette,2, Some(palette), None) => PixelType::Palette2(palette),
-            (ColorType::Palette,2, Some(palette), Some(transparency)) => PixelType::Palette2Transparent(palette, transparency),
-            (ColorType::Palette,4, Some(palette), None) => PixelType::Palette4(palette),
-            (ColorType::Palette,4, Some(palette), Some(transparency)) => PixelType::Palette4Transparent(palette, transparency),
-            (ColorType::Palette,8, Some(palette), None) => PixelType::Palette8(palette),
-            (ColorType::Palette,8, Some(palette), Some(transparency)) => PixelType::Palette8Transparent(palette, transparency),
-            (ColorType::GrayscaleAlpha,8, None, None) => PixelType::GrayscaleAlpha8,
-            (ColorType::GrayscaleAlpha,16, None, None) => PixelType::GrayscaleAlpha16,
-            (ColorType::Rgb,8, None, None) => PixelType::Rgb8,
-            (ColorType::Rgb,8, None, Some(data)) => PixelType::Rgb8Transparent([data[1], data[3], data[5]]),
-            (ColorType::Rgb,16, None, None) => PixelType::Rgb16,
-            (ColorType::Rgb,16, None, Some(data)) => PixelType::Rgb16Transparent([data[0], data[2], data[4]]),
-            (ColorType::RgbAlpha,8, None, None) => PixelType::RgbAlpha8,
-            (ColorType::RgbAlpha,18, None, None) => PixelType::RgbAlpha16,
+            (ColorType::Grayscale, 1, None, None) => PixelType::Grayscale1,
+            (ColorType::Grayscale, 1, None, Some(data)) => {
+                PixelType::Grayscale1Transparent(data[1] & 0b1)
+            }
+            (ColorType::Grayscale, 2, None, None) => PixelType::Grayscale2,
+            (ColorType::Grayscale, 2, None, Some(data)) => {
+                PixelType::Grayscale2Transparent(data[1] & 0b11)
+            }
+            (ColorType::Grayscale, 4, None, None) => PixelType::Grayscale4,
+            (ColorType::Grayscale, 4, None, Some(data)) => {
+                PixelType::Grayscale4Transparent(data[1] & 0b1111)
+            }
+            (ColorType::Grayscale, 8, None, None) => PixelType::Grayscale8,
+            (ColorType::Grayscale, 8, None, Some(data)) => {
+                PixelType::Grayscale8Transparent(data[1])
+            }
+            (ColorType::Grayscale, 16, None, None) => PixelType::Grayscale16,
+            (ColorType::Grayscale, 16, None, Some(data)) => {
+                PixelType::Grayscale16Transparent((data[0] as u16) << 8 | data[1] as u16)
+            }
+            (ColorType::Palette, 1, Some(palette), None) => PixelType::Palette1(palette),
+            (ColorType::Palette, 1, Some(palette), Some(transparency)) => {
+                PixelType::Palette1Transparent(palette, transparency)
+            }
+            (ColorType::Palette, 2, Some(palette), None) => PixelType::Palette2(palette),
+            (ColorType::Palette, 2, Some(palette), Some(transparency)) => {
+                PixelType::Palette2Transparent(palette, transparency)
+            }
+            (ColorType::Palette, 4, Some(palette), None) => PixelType::Palette4(palette),
+            (ColorType::Palette, 4, Some(palette), Some(transparency)) => {
+                PixelType::Palette4Transparent(palette, transparency)
+            }
+            (ColorType::Palette, 8, Some(palette), None) => PixelType::Palette8(palette),
+            (ColorType::Palette, 8, Some(palette), Some(transparency)) => {
+                PixelType::Palette8Transparent(palette, transparency)
+            }
+            (ColorType::GrayscaleAlpha, 8, None, None) => PixelType::GrayscaleAlpha8,
+            (ColorType::GrayscaleAlpha, 16, None, None) => PixelType::GrayscaleAlpha16,
+            (ColorType::Rgb, 8, None, None) => PixelType::Rgb8,
+            (ColorType::Rgb, 8, None, Some(data)) => {
+                PixelType::Rgb8Transparent([data[1], data[3], data[5]])
+            }
+            (ColorType::Rgb, 16, None, None) => PixelType::Rgb16,
+            (ColorType::Rgb, 16, None, Some(data)) => {
+                PixelType::Rgb16Transparent([data[0], data[2], data[4]])
+            }
+            (ColorType::RgbAlpha, 8, None, None) => PixelType::RgbAlpha8,
+            (ColorType::RgbAlpha, 18, None, None) => PixelType::RgbAlpha16,
             _ => return Err(DecodeError::InvalidPixelTypeCombination),
         };
         Ok(result)
