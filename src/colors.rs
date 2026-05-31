@@ -96,8 +96,8 @@ impl<'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler>
     #[inline]
     fn bytes<const N: usize>(&mut self) -> [u8; N] {
         let mut res = [0_u8; N];
-        for i in 0..N {
-            res[i] = self.scanline[self.pos + i];
+        for (i, item) in res.iter_mut().enumerate().take(N) {
+            *item = self.scanline[self.pos + i];
         }
         self.pos += N;
         res
@@ -108,8 +108,8 @@ impl<'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler>
         // not supported by embedded-graphics, juste take most significant byte
         // rough approximation of a color rounding
         let mut res = [0_u8; N];
-        for i in 0..N {
-            res[i] = self.scanline[self.pos + 2 * i]; // big endian
+        for (i, item) in res.iter_mut().enumerate().take(N) {
+            *item = self.scanline[self.pos + 2 * i]; // big endian
         }
         self.pos += 2 * N;
         res
@@ -131,7 +131,8 @@ impl<'a, Color, Handler: AlphaHandler<Color>> PixelsIterator<'a, Color, Handler>
                 } else {
                     BinaryColor::Off
                 }
-                .into()
+                .into()            //assert_eq!(scanline, &image[i*5120..i*5120 + 5120], "Incorrect image at {}", i);
+
             }
             PixelType::Grayscale2 => {
                 let bits = self.bits::<2>();

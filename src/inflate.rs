@@ -105,11 +105,10 @@ where
                 } else {
                     self.next_chunk_start = None;
                 }
-                if next_chunk.chunk_type == ChunkType::ImageData {
-                    if !next_chunk.data.is_empty() {
+                if next_chunk.chunk_type == ChunkType::ImageData &&
+                    !next_chunk.data.is_empty() {
                         self.current_chunk = Some(next_chunk.data);
                         return;
-                    }
                 }
             } else {
                 // this is the end my friend
@@ -181,15 +180,11 @@ where
             return Err(DecodeError::Decompress(status));
         }
         match status {
-            TINFLStatus::Done => {
-                if !self.chunk_end {
-                    return Err(DecodeError::InvalidChunk);
-                }
+            TINFLStatus::Done if !self.chunk_end => {
+                return Err(DecodeError::InvalidChunk);
             }
-            TINFLStatus::NeedsMoreInput => {
-                if self.chunk_end {
-                    return Err(DecodeError::InvalidChunk);
-                }
+            TINFLStatus::NeedsMoreInput if self.chunk_end => {
+                return Err(DecodeError::InvalidChunk);
             }
             // TINFLStatus::HasMoreOutput is handled gracefully by decompress on next run
             _ => {}
@@ -222,7 +217,7 @@ where
     fn copy_to_slice(&self, target: &mut [u8]) {
         let count = target.len();
         debug_assert!(
-            count + 1 <= self.buffer_count,
+            count < self.buffer_count,
             "copy_to_slice, error slice too big {} > {}",
             count + 1,
             self.buffer_count
@@ -379,8 +374,6 @@ mod tests {
         let bytes = fs::read("sekiro.png").unwrap();
         let png = ParsedPng::from_bytes(&bytes, true, AlphaColor).unwrap();
 
-        //let mut undecoded = pre_decode(&bytes).unwrap();
-
         let mut decompressor = ChunkDecompressor::new_static(png.data_chunks, true);
         let mut scanline = vec![0_u8; 5120];
 
@@ -398,7 +391,6 @@ mod tests {
                 enumeration, scanline,
                 "Enumerate misaligned with copy to slice"
             );
-            //assert_eq!(scanline, &undecoded.scanline_data[5121*i+1..5121*(i+1)], "Incorrect data at {}", i);
             decompressor.remove_data(5121);
         }
         assert_eq!(decompressor.buffer_count, 0, "Main buffer left");
@@ -410,27 +402,12 @@ mod tests {
         let bytes = fs::read("sekiro.png").unwrap();
         let png = ParsedPng::from_bytes(&bytes, true, AlphaColor).unwrap();
 
-        /*let mut undecoded = pre_decode(&bytes).unwrap();
-                let mut image = vec![0_u8; 1280*720*4];
-                undecoded.process_scanlines(
-                    |scanline_iter,xy_calculator,y| {
-                        for (idx, (r, g, b, a)) in scanline_iter.enumerate() {
-                            let (x, y) = xy_calculator.get_xy(idx, y);
-                            let idx = (x + y * 1280)*4;
-                            image[idx] = r;
-                            image[idx+1] = g;
-                            image[idx+2] = b;
-                            image[idx+3] = a;
-                        }
-                    }).unwrap();
-        */
         let mut decompressor = ChunkDecompressor::new_static(png.data_chunks, true);
         println!("Size: {}", size_of::<DecompressorOxide>());
         let mut scanline = vec![0_u8; 5120];
         for _ in 0..720 {
             let r = decompressor.decode_next_scanline(&mut scanline, 4);
             assert!(r.is_ok(), "Get data Error");
-            //assert_eq!(scanline, &image[i*5120..i*5120 + 5120], "Incorrect image at {}", i);
         }
         assert_eq!(decompressor.buffer_count, 0, "Main buffer left");
         assert!(decompressor.chunk_end, "Decompression left some data");

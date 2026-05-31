@@ -264,7 +264,7 @@ impl<'src, H: ReturnC> ParsedPng<'src, H> {
                             let (x, y) = get_xy(pass, x, y);
                             Pixel(Point::new(x as i32, y as i32), c)
                         }))
-                        .map_err(|e| DecodeError::MissingBytes)
+                        .map_err(|_| DecodeError::MissingBytes)
                 }
             },
         )
@@ -296,7 +296,7 @@ impl<'src> ParsedPng<'src, DontDraw> {
                             None
                         }
                     }))
-                    .map_err(|e| DecodeError::MissingBytes)
+                    .map_err(|_| DecodeError::MissingBytes)
             },
         )
     }
@@ -363,6 +363,7 @@ impl PngHeader {
     }
 
     fn pass_info(&self, pass: usize) -> (usize, usize) {
+        #[allow(clippy::manual_div_ceil)]
         match pass {
             1 => {
                 let pass_width = (self.width + 7) / 8;
@@ -391,7 +392,8 @@ impl PngHeader {
             }
             6 => {
                 let pass_width = self.width / 2;
-                let pass_height = (self.height / 2) + (self.height % 2);
+                let pass_height = (self.height / 2) +             //assert_eq!(scanline, &image[i*5120..i*5120 + 5120], "Incorrect image at {}", i);
+(self.height % 2);
                 (pass_width, pass_height)
             }
             7 => {
@@ -405,7 +407,7 @@ impl PngHeader {
 
     // TODO this is probably wrong with greyscale
     fn bytes_per_pixel(&self) -> usize {
-        ((self.bit_depth as usize * self.color_type.sample_multiplier()) + 7) / 8
+        (self.bit_depth as usize * self.color_type.sample_multiplier()).div_ceil(8)
     }
 
     fn bytes_per_scanline_max(&self) -> Result<usize, DecodeError> {
