@@ -36,9 +36,32 @@ pub struct ChunkDecompressor<'src, T> {
 }
 
 impl<'src, 'buf> ChunkDecompressor<'src, &'buf mut [u8]> {
-    // buffer size must be >= min(decompression_window(32k), total_output_size)
-    // buffer extra size must be >= max scanline bytes
-    pub fn new_ref(data_chunks: &'src [u8], buffer: &'buf mut [u8], buffer_extra: &'buf mut [u8], check_crc: bool) -> Self {
+    /// Do not allocate, the caller must provide a mutable buffer
+    ///  size must be >= min(decompression_window(32k), total_output_size)
+    pub fn new_ref(data_chunks: &'src [u8], buffer: &'buf mut [u8], check_crc: bool) -> Self {
+        Self::new(data_chunks, buffer, check_crc)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<'src> ChunkDecompressor<'src, Vec<u8>> {
+    /// Allocate a vector on the heap for the buffer (32k)
+    pub fn new_vec(data_chunks: &'src [u8], check_crc: bool) -> Self {
+        Self::new(data_chunks, vec![0_u8; 1024<<5], check_crc)
+    }
+}
+
+impl<'src> ChunkDecompressor<'src, [u8; 1024<<5]> {
+    /// Allocate an array on the stack or the buffer (32k)
+    pub fn new_static(data_chunks: &'src [u8], check_crc: bool) -> Self {
+        Self::new(data_chunks, [0_u8; 1024<<5], check_crc)
+    }
+}
+
+impl<'src, T> ChunkDecompressor<'src, T>
+where T: AsRef<[u8]> + AsMut<[u8]>
+{
+    fn new(data_chunks: &'src [u8], buffer: T, check_crc: bool) -> Self {
         let decompressor = DecompressorOxide::new();
         // png has zlib header, always pass has more input, it doesn't matter if it's false
         let mut flags = TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_HAS_MORE_INPUT;
@@ -58,65 +81,7 @@ impl<'src, 'buf> ChunkDecompressor<'src, &'buf mut [u8]> {
             total_decompressed: 0,
         }
     }
-}
 
-// TODO alloc only
-#[cfg(feature = "alloc")]
-impl<'src> ChunkDecompressor<'src, Vec<u8>> {
-    // buffer size must be >= min(decompression_window(32k), total_output_size)
-    // buffer extra size must be >= max scanline bytes
-    pub fn new_vec(data_chunks: &'src [u8], check_crc: bool) -> Self {
-        let decompressor = DecompressorOxide::new();
-        // png has zlib header, always pass has more input, it doesn't matter if it's false
-        let mut flags = TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_HAS_MORE_INPUT;
-        if check_crc {
-            flags |= TINFL_FLAG_COMPUTE_ADLER32;
-        }
-        ChunkDecompressor {
-            decompressor,
-            data_chunks,
-            next_chunk_start: Some(0),
-            current_chunk: None,
-            chunk_end: false,
-            buffer: vec![0_u8; 1024<<5],
-            data_pos: 0,
-            buffer_count: 0,
-            flags,
-            total_decompressed: 0,
-        }
-    }
-    pub fn update_buffers(&mut self) {}
-}
-
-impl<'src> ChunkDecompressor<'src, [u8; 1024<<5]> {
-    // buffer size must be >= min(decompression_window(32k), total_output_size)
-    // buffer extra size must be >= max scanline bytes
-    pub fn new_static(data_chunks: &'src [u8], check_crc: bool) -> Self {
-        let decompressor = DecompressorOxide::new();
-        // png has zlib header, always pass has more input, it doesn't matter if it's false
-        let mut flags = TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_HAS_MORE_INPUT;
-        if check_crc {
-            flags |= TINFL_FLAG_COMPUTE_ADLER32;
-        }
-        ChunkDecompressor {
-            decompressor,
-            data_chunks,
-            next_chunk_start: Some(0),
-            current_chunk: None,
-            chunk_end: false,
-            buffer: [0; 1024<<5],
-            data_pos: 0,
-            buffer_count: 0,
-            flags,
-            total_decompressed: 0,
-        }
-    }
-}
-
-
-impl<'src, T> ChunkDecompressor<'src, T>
-where T: AsRef<[u8]> + AsMut<[u8]>
-{
     // advance current chunk by one, result in self.current_chunk
     fn check_chunk_data(&mut self) {
         // we already have some data
@@ -131,7 +96,6 @@ where T: AsRef<[u8]> + AsMut<[u8]>
                 if next_chunk.end < self.data_chunks.len() {
                     self.next_chunk_start = Some(next_chunk.end);
                 } else {
-                    // TODO smelly, we assign none at 2 different steps
                     self.next_chunk_start = None;
                 }
                 if next_chunk.chunk_type == ChunkType::ImageData {
@@ -143,7 +107,6 @@ where T: AsRef<[u8]> + AsMut<[u8]>
             } else {
                 // this is the end my friend
                 self.current_chunk = None;
-                self.next_chunk_start = None;
                 self.chunk_end = true;
                 return;
             }
@@ -219,7 +182,8 @@ where T: AsRef<[u8]> + AsMut<[u8]>
     }
 
     // remove size bytes from buffer
-    fn remove_data(&mut self, size: usize) {
+    fn remove_data(&mut self, size: usize) {        extern crate alloc;
+
         self.data_pos += size;
         if self.data_pos >= self.buffer.as_ref().len() {
             self.data_pos -= self.buffer.as_ref().len();
@@ -351,7 +315,7 @@ mod tests {
         let bytes = fs::read("sekiro.png").unwrap();
         let png = ParsedPng::from_bytes(&bytes, true, AlphaColor).unwrap();
 
-        let mut decompressor = ChunkDecompressor::new_vec(png.data_chunks, true);
+        let mut decompressor = ChunkDecompressor::new_static(png.data_chunks, true);
 
         for _ in 0..35 {
             decompressor.current_chunk = None;
@@ -377,7 +341,7 @@ mod tests {
 
         //let mut undecoded = pre_decode(&bytes).unwrap();
 
-        let mut decompressor = ChunkDecompressor::new_vec(png.data_chunks,true);
+        let mut decompressor = ChunkDecompressor::new_static(png.data_chunks,true);
         let mut scanline = vec![0_u8; 5120];
 
         for _ in 0..720 {
@@ -413,7 +377,7 @@ mod tests {
                 }
             }).unwrap();
 */
-        let mut decompressor = ChunkDecompressor::new_vec(png.data_chunks, true);
+        let mut decompressor = ChunkDecompressor::new_static(png.data_chunks, true);
         println!("Size: {}", size_of::<DecompressorOxide>());
         let mut scanline = vec![0_u8; 5120];
         for _ in 0..720 {

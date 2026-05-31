@@ -1,4 +1,3 @@
-#![no_std]
 use core::convert::{TryFrom, TryInto};
 use crc32fast::Hasher;
 use embedded_graphics_core::draw_target::DrawTarget;
@@ -84,14 +83,14 @@ impl<'src, H> ParsedPng<'src, H> {
 
     //    fn linear_draw<T: DrawTarget>(&self, decompressor: &mut ChunkDecompressor, scanline_buf: &mut [u8], target: T) -> Result<(), DecodeError> {
     fn draw_inner<F, C>(&self,
-                        buffer: &mut [u8], buffer_extra: &mut [u8],
+                        buffer: &mut [u8],
                         scanline_buf: &mut [u8], mut writer: F) -> Result<(), DecodeError>
     where
         F: FnMut(usize, usize, PixelsIterator<C, H>) -> Result<(), DecodeError>,
         H: AlphaHandler<C>,
     {
         let mut decompressor = ChunkDecompressor::new_ref(
-            self.data_chunks, buffer, buffer_extra, self.crc_checked
+            self.data_chunks, buffer, self.crc_checked
         );
         let bytes_per_pixel = self.header.bytes_per_pixel();
         match self.header.interlace_method {
@@ -192,7 +191,7 @@ impl<'src, H> ParsedPng<'src, H> {
     }
 
     pub fn draw_to_fn<F, C>(&self,
-                            buffer: &mut [u8], buffer_extra: &mut [u8],
+                            buffer: &mut [u8],
                             scanline_buf: &mut [u8], mut write: F) -> Result<(), DecodeError>
     // TODO Result
     where
@@ -200,7 +199,7 @@ impl<'src, H> ParsedPng<'src, H> {
             for<'a> PixelsIterator<'a, C, H>: Iterator,
             H: AlphaHandler<C>,
     {
-        self.draw_inner(buffer, buffer_extra, scanline_buf, |y: usize, pass: usize, it: PixelsIterator<C, H>| {
+        self.draw_inner(buffer, scanline_buf, |y: usize, pass: usize, it: PixelsIterator<C, H>| {
             for (x, c) in it.enumerate() {
                 let (x,y) = get_xy(pass, x, y);
                 write(x, y, c)?;
@@ -212,14 +211,14 @@ impl<'src, H> ParsedPng<'src, H> {
 
 impl<'src, H: ReturnC> ParsedPng<'src, H> {
     pub fn draw_to_target<T, C>(&self,
-                                buffer: &mut [u8], buffer_extra: &mut [u8],
+                                buffer: &mut [u8],
                                 scanline_buf: &mut [u8], target: &mut T) -> Result<(), DecodeError>
     where for<'a> T: DrawTarget<Color=C>,
           for<'a> PixelsIterator<'a, C, H>: Iterator<Item=C>,
           C: PixelColor,
           H: AlphaHandler<C>,
     {
-        self.draw_inner(buffer, buffer_extra, scanline_buf, |y: usize, pass: usize, it: PixelsIterator<C, H>| {
+        self.draw_inner(buffer, scanline_buf, |y: usize, pass: usize, it: PixelsIterator<C, H>| {
             if pass == 0 {
                 let line = Rectangle::new(Point::new(0,y as i32), Size::new(self.header.width as u32,1));
                 target.fill_contiguous(&line, it).map_err(|_| DecodeError::MissingBytes)
@@ -236,13 +235,13 @@ impl<'src, H: ReturnC> ParsedPng<'src, H> {
 
 impl<'src> ParsedPng<'src, DontDraw> {
     pub fn draw_to_target<T, C>(&self,
-                                buffer: &mut [u8], buffer_extra: &mut [u8],
+                                buffer: &mut [u8],
                                 scanline_buf: &mut [u8], target: &mut T) -> Result<(), DecodeError>
     where for<'a> T: DrawTarget<Color=C>,
           for<'a> PixelsIterator<'a, C, DontDraw>: Iterator<Item=(u8,C)>,
           C: PixelColor,
     {
-        self.draw_inner(buffer, buffer_extra, scanline_buf, |y: usize, pass: usize, it: PixelsIterator<C, DontDraw>| {
+        self.draw_inner(buffer, scanline_buf, |y: usize, pass: usize, it: PixelsIterator<C, DontDraw>| {
             target.draw_iter(it.enumerate()
                 .filter_map(|(x, (a,c))| {
                     if a >= 128 {
